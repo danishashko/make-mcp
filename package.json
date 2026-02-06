@@ -1,0 +1,58 @@
+{
+  "name": "make-mcp",
+  "version": "1.1.0",
+  "description": "MCP server for creating, validating, and deploying Make.com automation scenarios via AI assistants",
+  "main": "dist/mcp/server.js",
+  "types": "dist/mcp/server.d.ts",
+  "type": "module",
+  "bin": {
+    "make-mcp": "./bin/make-mcp.js"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "src/database/schema.sql",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/mcp/server.js",
+    "start:dev": "tsx src/mcp/server.ts",
+    "scrape": "tsx src/scrapers/scrape-modules.ts",
+    "scrape:prod": "node dist/scrapers/scrape-modules.js",
+    "dev": "tsx watch src/mcp/server.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "postinstall": "node bin/postinstall.js"
+  },
+  "keywords": [
+    "mcp",
+    "make",
+    "make.com",
+    "integromat",
+    "automation",
+    "scenario",
+    "ai",
+    "llm",
+    "model-context-protocol",
+    "claude",
+    "copilot"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "axios": "^1.13.4",
+    "better-sqlite3": "^12.6.2",
+    "dotenv": "^17.2.4",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.2.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
