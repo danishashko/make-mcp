@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.1] - 2026-02-07
+
+### Fixed
+- **npx `-y` flag** — All README examples now include `-y` to prevent interactive "Ok to proceed?" prompt that hangs MCP clients
+
 ## [1.3.0] - 2026-02-07
 
 ### Added

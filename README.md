@@ -31,7 +31,7 @@ The fastest way to get started — no cloning, no building:
 
 ```bash
 # Run directly — no installation needed!
-npx make-mcp-server
+npx -y make-mcp-server
 ```
 
 The package includes a pre-built database with all 200+ Make.com modules. Just add it to your MCP client config and go.
@@ -45,7 +45,7 @@ Basic configuration (documentation tools only):
   "mcpServers": {
     "make-mcp-server": {
       "command": "npx",
-      "args": ["make-mcp-server"],
+      "args": ["-y", "make-mcp-server"],
       "env": {
         "LOG_LEVEL": "error"
       }
@@ -61,7 +61,7 @@ Full configuration (with Make.com deployment):
   "mcpServers": {
     "make-mcp-server": {
       "command": "npx",
-      "args": ["make-mcp-server"],
+      "args": ["-y", "make-mcp-server"],
       "env": {
         "LOG_LEVEL": "error",
         "MAKE_API_KEY": "your_api_key_here",

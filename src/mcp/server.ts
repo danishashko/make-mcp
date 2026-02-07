@@ -23,7 +23,7 @@ import { logger } from '../utils/logger.js';
 
 dotenv.config();
 
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 
 // ── Database ──
 // DATABASE_PATH env var overrides default; otherwise db.ts resolves
