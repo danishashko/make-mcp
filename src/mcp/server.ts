@@ -23,7 +23,7 @@ import { logger } from '../utils/logger.js';
 
 dotenv.config();
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 
 // ── Database ──
 // DATABASE_PATH env var overrides default; otherwise db.ts resolves
@@ -119,6 +119,9 @@ server.registerTool('tools_documentation', {
             'First module in a scenario should be a trigger',
             'Parameters reference previous modules with {{moduleId.field}} syntax',
             'Always validate before deploying to catch errors early',
+            'Do NOT set "version" on modules — Make.com auto-resolves the latest installed version',
+            'Router filters cannot be set via the API — deploy without filters, then configure them in the Make.com UI',
+            'The create_scenario tool auto-heals missing metadata, designer coords, and strips unsupported properties',
         ],
     };
 
@@ -229,16 +232,11 @@ server.registerTool('validate_scenario', {
         const warnings: string[] = [];
         const validatedModules: string[] = [];
 
-        if (!parsed.flow || !Array.isArray(parsed.flow)) {
-            errors.push('Blueprint must contain a "flow" array of modules.');
-        } else {
-            if (parsed.flow.length === 0) {
-                errors.push('Flow array is empty. Add at least one module.');
-            }
-
-            for (let i = 0; i < parsed.flow.length; i++) {
-                const flowModule = parsed.flow[i];
-                const pos = `Flow[${i}]`;
+        // Recursive helper to validate a flow array (handles router sub-routes)
+        const validateFlow = (flow: any[], pathPrefix: string) => {
+            for (let i = 0; i < flow.length; i++) {
+                const flowModule = flow[i];
+                const pos = `${pathPrefix}[${i}]`;
 
                 if (!flowModule || typeof flowModule !== 'object') {
                     errors.push(`${pos}: Each flow item must be an object.`);
@@ -250,6 +248,11 @@ server.registerTool('validate_scenario', {
                     continue;
                 }
 
+                // Warn about missing id
+                if (flowModule.id === undefined) {
+                    warnings.push(`${pos} (${flowModule.module}): Missing "id" field. Each module should have a unique numeric ID.`);
+                }
+
                 const schema = db.getModule(flowModule.module);
                 if (!schema) {
                     errors.push(`${pos}: Unknown module "${flowModule.module}". Use search_modules to find valid IDs.`);
@@ -258,10 +261,17 @@ server.registerTool('validate_scenario', {
 
                 validatedModules.push(flowModule.module);
 
-                // Check required parameters
+                // Check required parameters — skip "routes" for Router (it's a top-level flow property)
                 const params = JSON.parse(schema.parameters);
                 for (const param of params) {
                     if (param.required) {
+                        // Router "routes" lives as a sibling key on the flow item, not inside parameters/mapper
+                        if (flowModule.module === 'builtin:BasicRouter' && param.name === 'routes') {
+                            if (!flowModule.routes || !Array.isArray(flowModule.routes) || flowModule.routes.length === 0) {
+                                errors.push(`${pos} (${flowModule.module}): Router must have a "routes" array with at least one route.`);
+                            }
+                            continue;
+                        }
                         const hasParam = flowModule.parameters?.[param.name] !== undefined
                             || flowModule.mapper?.[param.name] !== undefined;
                         if (!hasParam) {
@@ -269,7 +279,27 @@ server.registerTool('validate_scenario', {
                         }
                     }
                 }
+
+                // Recurse into router routes
+                if (flowModule.routes && Array.isArray(flowModule.routes)) {
+                    for (let r = 0; r < flowModule.routes.length; r++) {
+                        const route = flowModule.routes[r];
+                        if (route.flow && Array.isArray(route.flow)) {
+                            validateFlow(route.flow, `${pos}.routes[${r}]`);
+                        }
+                    }
+                }
             }
+        };
+
+        if (!parsed.flow || !Array.isArray(parsed.flow)) {
+            errors.push('Blueprint must contain a "flow" array of modules.');
+        } else {
+            if (parsed.flow.length === 0) {
+                errors.push('Flow array is empty. Add at least one module.');
+            }
+
+            validateFlow(parsed.flow, 'Flow');
 
             // Warn if first module is not a trigger
             if (parsed.flow.length > 0 && parsed.flow[0]?.module) {
@@ -278,13 +308,11 @@ server.registerTool('validate_scenario', {
                     warnings.push('First module should typically be a trigger. Your scenario has no trigger entry point.');
                 }
             }
+        }
 
-            // Warn about missing module IDs
-            for (let i = 0; i < parsed.flow.length; i++) {
-                if (!parsed.flow[i]?.id && parsed.flow[i]?.id !== 0) {
-                    warnings.push(`Flow[${i}]: Missing "id" field. Each module should have a unique numeric ID for mapping references.`);
-                }
-            }
+        // Warn about missing metadata (Make.com requires it)
+        if (!parsed.metadata) {
+            warnings.push('Blueprint is missing "metadata" section. It will be auto-injected during deployment.');
         }
 
         const result = {
@@ -339,18 +367,71 @@ server.registerTool('create_scenario', {
             return fail('Team ID required. Provide teamId parameter or set MAKE_TEAM_ID in .env file.');
         }
 
-        // Validate blueprint JSON
+        // Parse and auto-heal the blueprint
+        let parsed: any;
         try {
-            JSON.parse(blueprint);
+            parsed = JSON.parse(blueprint);
         } catch {
             return fail('Invalid blueprint JSON. Run validate_scenario first.');
         }
+
+        // Auto-inject metadata if missing (Make.com requires it)
+        if (!parsed.metadata) {
+            parsed.metadata = {
+                version: 1,
+                scenario: {
+                    roundtrips: 1,
+                    maxErrors: 3,
+                    autoCommit: true,
+                    autoCommitTriggerLast: true,
+                    sequential: false,
+                    confidential: false,
+                    dataloss: false,
+                    dlq: false,
+                    freshVariables: false,
+                },
+                designer: { orphans: [] },
+            };
+            logger.info('create_scenario: auto-injected missing metadata');
+        }
+
+        // Auto-inject designer metadata on flow modules if missing (recursively).
+        // NOTE: We intentionally do NOT inject "version" — Make.com resolves
+        // the latest installed version when omitted.  Forcing version:1 breaks
+        // modules that have been updated (e.g. HTTP is currently v4).
+        const healFlow = (flow: any[]) => {
+            for (const mod of flow) {
+                if (!mod || typeof mod !== 'object') continue;
+                if (!mod.metadata) mod.metadata = { designer: { x: 0, y: 0 } };
+                else if (!mod.metadata.designer) mod.metadata.designer = { x: 0, y: 0 };
+                // Recurse into router routes
+                if (mod.routes && Array.isArray(mod.routes)) {
+                    for (const route of mod.routes) {
+                        // Strip "filter" from route objects — Make.com API rejects
+                        // it as an additional property.  Router filters must be
+                        // configured via the Make.com UI after deployment.
+                        if (route.filter !== undefined) {
+                            delete route.filter;
+                            logger.info('create_scenario: stripped unsupported "filter" from router route');
+                        }
+                        if (route.flow && Array.isArray(route.flow)) {
+                            healFlow(route.flow);
+                        }
+                    }
+                }
+            }
+        };
+        if (parsed.flow && Array.isArray(parsed.flow)) {
+            healFlow(parsed.flow);
+        }
+
+        const healedBlueprint = JSON.stringify(parsed);
 
         const baseUrl = process.env['MAKE_API_URL'] || 'https://eu1.make.com/api/v2';
         const payload: any = {
             teamId: resolvedTeamId,
             name,
-            blueprint,
+            blueprint: healedBlueprint,
             scheduling: JSON.stringify({ type: 'on-demand' }),
         };
         if (folderId) payload.folderId = folderId;
@@ -358,7 +439,7 @@ server.registerTool('create_scenario', {
         logger.info('create_scenario', { name, teamId: resolvedTeamId });
 
         const response = await axios.post(
-            `${baseUrl}/scenarios`,
+            `${baseUrl}/scenarios?confirmed=true`,
             payload,
             {
                 headers: {
@@ -375,9 +456,11 @@ server.registerTool('create_scenario', {
             message: `Scenario "${name}" created successfully.`,
         });
     } catch (error: any) {
-        const msg = error.response?.data?.message || error.message;
+        // Extract the most useful error message from Make.com's response
+        const data = error.response?.data;
+        const msg = data?.detail || data?.message || (typeof data === 'string' ? data : null) || error.message;
         const status = error.response?.status;
-        logger.error('create_scenario failed', { error: msg, status });
+        logger.error('create_scenario failed', { error: msg, status, responseData: data });
 
         if (status === 401) {
             return fail('Authentication failed. Check your MAKE_API_KEY.');
@@ -385,7 +468,9 @@ server.registerTool('create_scenario', {
         if (status === 403) {
             return fail('Access denied. Check your API key permissions and team ID.');
         }
-        return fail(`Failed to create scenario: ${msg}`);
+        // Include full response data for debugging 400 errors
+        const detail = data ? JSON.stringify(data, null, 2) : msg;
+        return fail(`Failed to create scenario (HTTP ${status || 'unknown'}): ${detail}`);
     }
 });
 

@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-02-07
+
+### Added
+- **Auto-healing** for LLM-generated blueprints — `create_scenario` now auto-injects missing `metadata`, `scenario` config, and `designer` coordinates
+- **Router support** — Full `builtin:BasicRouter` deployment with multiple routes (tested & verified)
+- **Recursive validation** — `validate_scenario` now traverses into router sub-routes
+- **Router filter stripping** — Automatically removes unsupported `filter` property from route objects
+- **Enhanced error reporting** — `create_scenario` returns full Make.com API error details including `suberrors`
+- **`?confirmed=true`** query parameter on scenario creation to auto-install first-time apps
+- 3 new tips in `tools_documentation` about versioning, filters, and auto-healing
+
+### Changed
+- Module `version` is no longer auto-injected — Make.com resolves the latest installed version automatically
+- Removed false "missing version" warning from `validate_scenario`
+
+### Fixed
+- **HTTP module "Module not found"** — Caused by forcing `version: 1` on modules that have been updated (HTTP is now v4)
+- **Router 400 Bad Request** — Caused by `filter` property being rejected as additional property on route objects
+- **Workspace MCP config override** — `.vscode/mcp.json` was overriding global config; documented that all env vars must be present in workspace config
+
 ## [1.2.0] - 2026-02-07
 
 ### Added

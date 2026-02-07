@@ -9,8 +9,10 @@ A Model Context Protocol (MCP) server that provides AI assistants with comprehen
 
 - **🔍 200+ Modules** — Full-text search across 200+ Make.com modules (Slack, Gmail, Google Sheets, Notion, OpenAI, and 35+ more apps)
 - **📋 Module Details** — Retrieve parameters, types, descriptions, and usage docs for any module
-- **✅ Blueprint Validation** — Check scenarios for missing parameters, unknown modules, and structural issues before deploying
+- **✅ Blueprint Validation** — Check scenarios for missing parameters, unknown modules, structural issues, and router sub-routes before deploying
 - **🚀 Deploy to Make.com** — Push validated blueprints directly to Make.com via API
+- **🩹 Auto-Healing** — Automatically fixes LLM-generated blueprints: injects missing `metadata`, adds `designer` coordinates, strips unsupported properties like router `filter`
+- **🔀 Router Support** — Full support for `builtin:BasicRouter` with multiple routes and recursive validation
 - **📚 Scenario Templates** — Browse reusable scenario templates for common workflows
 - **📖 Guided Prompts** — MCP prompts for guided scenario building and module exploration
 - **📊 Resource Catalog** — MCP resources for browsing available apps
@@ -219,6 +221,19 @@ Then ask your AI assistant things like:
 | `create_scenario` | Deploy a scenario to Make.com via API |
 | `search_templates` | Search reusable scenario templates |
 | `list_apps` | List all apps with module counts |
+
+## Auto-Healing
+
+The `create_scenario` tool automatically fixes common issues in LLM-generated blueprints:
+
+| Issue | Auto-Fix |
+|-------|----------|
+| Missing `metadata` section | Injects full metadata with `version`, `scenario` config, and `designer` |
+| Missing `metadata.designer` on modules | Adds `{ x: 0, y: 0 }` coordinates |
+| Router `filter` in route objects | Strips unsupported `filter` property (configure filters in Make.com UI) |
+| Missing `version` on modules | Left unset — Make.com auto-resolves the latest installed version |
+
+> **Tip:** Do NOT hardcode `"version": 1` on modules. Some apps (e.g., HTTP) are on v4+ and specifying the wrong version causes "Module not found" errors.
 
 ## MCP Prompts
 
