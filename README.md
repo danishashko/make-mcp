@@ -1,9 +1,9 @@
-# make-mcp-server
+# Make.com MCP Server — Build & Deploy Automation Scenarios with AI
 
 [![npm version](https://img.shields.io/npm/v/make-mcp-server)](https://www.npmjs.com/package/make-mcp-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Model Context Protocol (MCP) server that provides AI assistants with comprehensive access to Make.com module documentation, scenario building, and deployment. Deploy in minutes to give Claude, Copilot, and other AI assistants deep knowledge about Make.com's 200+ automation modules across 40+ apps.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that gives AI assistants like **Claude**, **GitHub Copilot**, and **Cursor** full access to Make.com module documentation, scenario validation, and one-click deployment. Search 200+ automation modules across 40+ apps, build blueprints with auto-healing, and deploy directly to Make.com — all from your AI chat.
 
 ## Features
 
