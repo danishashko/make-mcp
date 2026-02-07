@@ -23,10 +23,10 @@ if (!fs.existsSync(dataDir)) {
 
 if (fs.existsSync(dbPath)) {
     const stats = fs.statSync(dbPath);
-    process.stderr.write(`[make-mcp] ✅ Database ready (${(stats.size / 1024).toFixed(0)} KB)\n`);
+    process.stderr.write(`[make-mcp-server] ✅ Database ready (${(stats.size / 1024).toFixed(0)} KB)\n`);
 } else {
     process.stderr.write(
-        '[make-mcp] ⚠️  Database not found. If you cloned from source, run:\n' +
+        '[make-mcp-server] ⚠️  Database not found. If you cloned from source, run:\n' +
         '  npm run build && npm run scrape:prod\n' +
         '  to populate the module database.\n'
     );

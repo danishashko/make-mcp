@@ -97,7 +97,7 @@ describe('MCP Server Protocol', () => {
         expect(Array.isArray(result.content)).toBe(true);
         const text = (result.content as any[])[0].text;
         const doc = JSON.parse(text);
-        expect(doc.server.name).toBe('make-mcp');
+        expect(doc.server.name).toBe('make-mcp-server');
         expect(doc.tools).toBeDefined();
         expect(doc.quickStart).toBeDefined();
         expect(doc.blueprintFormat).toBeDefined();

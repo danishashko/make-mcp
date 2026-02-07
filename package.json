@@ -1,12 +1,12 @@
 {
-  "name": "make-mcp",
-  "version": "1.1.0",
+  "name": "make-mcp-server",
+  "version": "1.2.0",
   "description": "MCP server for creating, validating, and deploying Make.com automation scenarios via AI assistants",
   "main": "dist/mcp/server.js",
   "types": "dist/mcp/server.d.ts",
   "type": "module",
   "bin": {
-    "make-mcp": "./bin/make-mcp.js"
+    "make-mcp-server": "./bin/make-mcp.js"
   },
   "files": [
     "dist/",
@@ -44,8 +44,16 @@
     "claude",
     "copilot"
   ],
-  "author": "",
+  "author": "Daniel Shashko (https://www.linkedin.com/in/daniel-shashko/)",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danishashko/make-mcp.git"
+  },
+  "homepage": "https://github.com/danishashko/make-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/danishashko/make-mcp/issues"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
     "axios": "^1.13.4",

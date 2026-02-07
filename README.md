@@ -1,6 +1,6 @@
-# make-mcp
+# make-mcp-server
 
-[![npm version](https://img.shields.io/npm/v/make-mcp)](https://www.npmjs.com/package/make-mcp)
+[![npm version](https://img.shields.io/npm/v/make-mcp-server)](https://www.npmjs.com/package/make-mcp-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A Model Context Protocol (MCP) server that provides AI assistants with comprehensive access to Make.com module documentation, scenario building, and deployment. Deploy in minutes to give Claude, Copilot, and other AI assistants deep knowledge about Make.com's 200+ automation modules across 40+ apps.
@@ -29,7 +29,7 @@ The fastest way to get started — no cloning, no building:
 
 ```bash
 # Run directly — no installation needed!
-npx make-mcp
+npx make-mcp-server
 ```
 
 The package includes a pre-built database with all 200+ Make.com modules. Just add it to your MCP client config and go.
@@ -41,9 +41,9 @@ Basic configuration (documentation tools only):
 ```json
 {
   "mcpServers": {
-    "make-mcp": {
+    "make-mcp-server": {
       "command": "npx",
-      "args": ["make-mcp"],
+      "args": ["make-mcp-server"],
       "env": {
         "LOG_LEVEL": "error"
       }
@@ -57,9 +57,9 @@ Full configuration (with Make.com deployment):
 ```json
 {
   "mcpServers": {
-    "make-mcp": {
+    "make-mcp-server": {
       "command": "npx",
-      "args": ["make-mcp"],
+      "args": ["make-mcp-server"],
       "env": {
         "LOG_LEVEL": "error",
         "MAKE_API_KEY": "your_api_key_here",
@@ -81,10 +81,10 @@ Full configuration (with Make.com deployment):
 
 ```bash
 # Build the Docker image
-docker build -t make-mcp .
+docker build -t make-mcp-server .
 
 # Test it works
-echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}},"id":1}' | docker run -i --rm make-mcp
+echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}},"id":1}' | docker run -i --rm make-mcp-server
 ```
 
 **Claude Desktop config:**
@@ -94,12 +94,12 @@ Basic configuration (documentation tools only):
 ```json
 {
   "mcpServers": {
-    "make-mcp": {
+    "make-mcp-server": {
       "command": "docker",
       "args": [
         "run", "-i", "--rm", "--init",
         "-e", "LOG_LEVEL=error",
-        "make-mcp"
+        "make-mcp-server"
       ]
     }
   }
@@ -111,7 +111,7 @@ Full configuration (with Make.com deployment):
 ```json
 {
   "mcpServers": {
-    "make-mcp": {
+    "make-mcp-server": {
       "command": "docker",
       "args": [
         "run", "-i", "--rm", "--init",
@@ -119,7 +119,7 @@ Full configuration (with Make.com deployment):
         "-e", "MAKE_API_KEY=your_api_key_here",
         "-e", "MAKE_TEAM_ID=your_team_id",
         "-e", "MAKE_API_URL=https://eu1.make.com/api/v2",
-        "make-mcp"
+        "make-mcp-server"
       ]
     }
   }
@@ -136,7 +136,7 @@ Full configuration (with Make.com deployment):
 
 ```bash
 # 1. Clone and install
-git clone <repo-url>
+git clone https://github.com/danishashko/make-mcp.git
 cd make-mcp
 npm install
 
@@ -155,7 +155,7 @@ npm start
 ```json
 {
   "mcpServers": {
-    "make-mcp": {
+    "make-mcp-server": {
       "command": "node",
       "args": ["/absolute/path/to/make-mcp/dist/mcp/server.js"],
       "env": {
@@ -186,7 +186,7 @@ npm start
 
 ### 💻 Connect Your IDE
 
-make-mcp works with any MCP-compatible client:
+make-mcp-server works with any MCP-compatible client:
 
 - **Claude Desktop** — See configurations above
 - **VS Code (GitHub Copilot)** — Add to `.vscode/mcp.json`
@@ -236,10 +236,10 @@ Then ask your AI assistant things like:
 ## CLI Usage
 
 ```bash
-make-mcp              # Start the MCP server (stdio transport)
-make-mcp --scrape     # Populate/refresh the module database
-make-mcp --version    # Print version
-make-mcp --help       # Show help
+make-mcp-server              # Start the MCP server (stdio transport)
+make-mcp-server --scrape     # Populate/refresh the module database
+make-mcp-server --version    # Print version
+make-mcp-server --help       # Show help
 ```
 
 ## Environment Variables
@@ -325,6 +325,10 @@ Dockerfile                 # Multi-stage Docker image
 
 Google Sheets, Slack, OpenAI, Google Drive, Notion, Telegram Bot, HubSpot CRM, Gmail, Airtable, Tools, Flow Control, Google Calendar, Jira, Trello, Shopify, Google Docs, Microsoft Teams, Microsoft Outlook, Discord, Asana, monday.com, Salesforce, Stripe, GitHub, HTTP, Mailchimp, WordPress, Dropbox, Data Store, JSON, Twilio, Google Gemini AI, WhatsApp Business, Text Parser, Webhooks, Anthropic Claude, CSV, RSS, Email, Schedule
 
+## Author
+
+Built by **[Daniel Shashko](https://www.linkedin.com/in/daniel-shashko/)**
+
 ## License
 
-MIT
+MIT License — see [LICENSE](LICENSE) for details.

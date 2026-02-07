@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
 /**
- * make-mcp CLI entry point
+ * make-mcp-server CLI entry point
  *
  * Usage:
- *   npx make-mcp                    — Start MCP server on stdio
- *   npx make-mcp --scrape           — Populate/refresh the module database
- *   npx make-mcp --version          — Print version
- *   npx make-mcp --help             — Show help
+ *   npx make-mcp-server                    — Start MCP server on stdio
+ *   npx make-mcp-server --scrape           — Populate/refresh the module database
+ *   npx make-mcp-server --version          — Print version
+ *   npx make-mcp-server --help             — Show help
  */
 
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -21,19 +21,19 @@ const args = process.argv.slice(2);
 
 if (args.includes('--version') || args.includes('-v')) {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8'));
-    process.stderr.write(`make-mcp v${pkg.version}\n`);
+    process.stderr.write(`make-mcp-server v${pkg.version}\n`);
     process.exit(0);
 }
 
 if (args.includes('--help') || args.includes('-h')) {
     process.stderr.write(`
-make-mcp — MCP server for Make.com automation scenarios
+make-mcp-server — MCP server for Make.com automation scenarios
 
 Usage:
-  make-mcp              Start the MCP server (stdio transport)
-  make-mcp --scrape     Populate/refresh the module database
-  make-mcp --version    Print version
-  make-mcp --help       Show this help
+  make-mcp-server              Start the MCP server (stdio transport)
+  make-mcp-server --scrape     Populate/refresh the module database
+  make-mcp-server --version    Print version
+  make-mcp-server --help       Show this help
 
 Environment Variables:
   MAKE_API_KEY          Make.com API key (required for deployment)
@@ -45,9 +45,9 @@ Environment Variables:
 Claude Desktop Config:
   {
     "mcpServers": {
-      "make-mcp": {
+      "make-mcp-server": {
         "command": "npx",
-        "args": ["make-mcp"],
+        "args": ["make-mcp-server"],
         "env": {
           "MAKE_API_KEY": "your_api_key_here",
           "MAKE_TEAM_ID": "your_team_id"

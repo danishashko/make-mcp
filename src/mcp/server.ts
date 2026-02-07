@@ -1,5 +1,6 @@
 /**
  * Make.com MCP Server — Production-grade
+ * @author Daniel Shashko (https://www.linkedin.com/in/daniel-shashko/)
  *
  * Features:
  *   - registerTool / registerPrompt / registerResource (latest v1.x SDK API)
@@ -22,7 +23,7 @@ import { logger } from '../utils/logger.js';
 
 dotenv.config();
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 // ── Database ──
 // DATABASE_PATH env var overrides default; otherwise db.ts resolves
@@ -32,7 +33,7 @@ const db = new MakeDatabase(dbPath);
 
 // ── MCP Server ──
 const server = new McpServer({
-    name: 'make-mcp',
+    name: 'make-mcp-server',
     version: VERSION,
 });
 
@@ -65,7 +66,7 @@ server.registerTool('tools_documentation', {
 }, async () => {
     const doc = {
         server: {
-            name: 'make-mcp',
+            name: 'make-mcp-server',
             version: VERSION,
             description: 'MCP server for creating, validating, and deploying Make.com automation scenarios.',
         },

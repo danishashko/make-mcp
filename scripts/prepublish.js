@@ -8,7 +8,7 @@
  *  2. Run the scraper to populate data/make-modules.db
  *  3. Verify the database was created and has data
  *
- * This ensures that `npx make-mcp` works immediately without any setup.
+ * This ensures that `npx make-mcp-server` works immediately without any setup.
  */
 
 import { execSync } from 'child_process';
