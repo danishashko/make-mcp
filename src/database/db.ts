@@ -1,23 +1,60 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+// Resolve paths relative to the package root (works with npx, global install, local)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+// From src/database/ or dist/database/ → package root
+const PACKAGE_ROOT = path.resolve(__dirname, '..', '..');
+
+/**
+ * Resolve the database path.
+ *  - Explicit path → use as-is
+ *  - Default       → <packageRoot>/data/make-modules.db
+ */
+function resolveDbPath(dbPath?: string): string {
+    if (dbPath && dbPath !== './data/make-modules.db') {
+        return path.resolve(dbPath);
+    }
+    return path.join(PACKAGE_ROOT, 'data', 'make-modules.db');
+}
+
+/**
+ * Locate schema.sql — check src/ first (dev), then fall back to dist/ (npm package).
+ */
+function resolveSchemaPath(): string {
+    const srcPath = path.join(PACKAGE_ROOT, 'src', 'database', 'schema.sql');
+    if (fs.existsSync(srcPath)) return srcPath;
+
+    // Bundled fallback: schema.sql shipped alongside compiled JS
+    const distPath = path.join(__dirname, 'schema.sql');
+    if (fs.existsSync(distPath)) return distPath;
+
+    throw new Error(
+        `schema.sql not found. Searched:\n  - ${srcPath}\n  - ${distPath}`
+    );
+}
 
 export class MakeDatabase {
     private db: Database.Database;
 
-    constructor(dbPath: string = './data/make-modules.db') {
-        const dir = path.dirname(dbPath);
+    constructor(dbPath?: string) {
+        const resolved = resolveDbPath(dbPath);
+        const dir = path.dirname(resolved);
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
 
-        this.db = new Database(dbPath);
+        this.db = new Database(resolved);
         this.db.pragma('journal_mode = WAL');
         this.initializeSchema();
     }
 
     private initializeSchema() {
-        const schema = fs.readFileSync('./src/database/schema.sql', 'utf-8');
+        const schemaPath = resolveSchemaPath();
+        const schema = fs.readFileSync(schemaPath, 'utf-8');
         this.db.exec(schema);
     }
 

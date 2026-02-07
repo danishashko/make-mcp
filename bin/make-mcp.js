@@ -10,7 +10,7 @@
  *   npx make-mcp --help             — Show help
  */
 
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import path from 'path';
 import fs from 'fs';
 
@@ -66,7 +66,7 @@ if (args.includes('--scrape')) {
         process.stderr.write('Error: Build the project first with `npm run build`\n');
         process.exit(1);
     }
-    await import(scraperPath);
+    await import(pathToFileURL(scraperPath).href);
 } else {
     // Start MCP server
     const serverPath = path.join(__dirname, '..', 'dist', 'mcp', 'server.js');
@@ -74,5 +74,5 @@ if (args.includes('--scrape')) {
         process.stderr.write('Error: Build the project first with `npm run build`\n');
         process.exit(1);
     }
-    await import(serverPath);
+    await import(pathToFileURL(serverPath).href);
 }

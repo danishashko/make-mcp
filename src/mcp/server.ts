@@ -25,7 +25,9 @@ dotenv.config();
 const VERSION = '1.1.0';
 
 // ── Database ──
-const dbPath = process.env['DATABASE_PATH'] || './data/make-modules.db';
+// DATABASE_PATH env var overrides default; otherwise db.ts resolves
+// to <packageRoot>/data/make-modules.db automatically.
+const dbPath = process.env['DATABASE_PATH'];
 const db = new MakeDatabase(dbPath);
 
 // ── MCP Server ──
@@ -597,7 +599,6 @@ async function main() {
     await server.connect(transport);
     logger.info(`Make MCP server v${VERSION} running on stdio`, {
         modules: db.searchModules('*').length,
-        dbPath,
     });
 }
 

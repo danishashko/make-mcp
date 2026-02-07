@@ -1,6 +1,9 @@
 # make-mcp
 
-MCP server for creating, validating, and deploying [Make.com](https://www.make.com/) automation scenarios through AI assistants like Claude, Copilot, and other MCP-compatible clients.
+[![npm version](https://img.shields.io/npm/v/make-mcp)](https://www.npmjs.com/package/make-mcp)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+A Model Context Protocol (MCP) server that provides AI assistants with comprehensive access to Make.com module documentation, scenario building, and deployment. Deploy in minutes to give Claude, Copilot, and other AI assistants deep knowledge about Make.com's 200+ automation modules across 40+ apps.
 
 ## Features
 
@@ -12,50 +15,36 @@ MCP server for creating, validating, and deploying [Make.com](https://www.make.c
 - **📖 Guided Prompts** — MCP prompts for guided scenario building and module exploration
 - **📊 Resource Catalog** — MCP resources for browsing available apps
 - **🧪 42 Tests** — Unit + integration test suite with Vitest
+- **⚡ Fast Response** — Optimized SQLite with FTS5 full-text search
 
-## Quick Start
+---
 
-### 1. Install & build
+## 🚀 Quick Start — Self-Hosting Options
 
-```bash
-git clone <repo-url>
-cd make-mcp
-npm install
-npm run build
-```
+### Option A: npx (No Installation Needed!) 🚀
 
-### 2. Populate the module database
+The fastest way to get started — no cloning, no building:
+
+**Prerequisites:** [Node.js](https://nodejs.org/) installed on your system
 
 ```bash
-npm run scrape
+# Run directly — no installation needed!
+npx make-mcp
 ```
 
-### 3. Configure environment (optional — only needed for deployment)
+The package includes a pre-built database with all 200+ Make.com modules. Just add it to your MCP client config and go.
 
-```bash
-cp .env.example .env
-# Edit .env with your Make.com API credentials
-```
+**Claude Desktop config** (`claude_desktop_config.json`):
 
-### 4. Start the MCP server
-
-```bash
-npm start
-```
-
-## Claude Desktop Integration
-
-Add to your Claude Desktop config (`claude_desktop_config.json`):
+Basic configuration (documentation tools only):
 
 ```json
 {
   "mcpServers": {
     "make-mcp": {
-      "command": "node",
-      "args": ["/path/to/make-mcp/dist/mcp/server.js"],
+      "command": "npx",
+      "args": ["make-mcp"],
       "env": {
-        "MAKE_API_KEY": "your_api_key_here",
-        "MAKE_TEAM_ID": "your_team_id",
         "LOG_LEVEL": "error"
       }
     }
@@ -63,14 +52,114 @@ Add to your Claude Desktop config (`claude_desktop_config.json`):
 }
 ```
 
-Or using the CLI:
+Full configuration (with Make.com deployment):
 
 ```json
 {
   "mcpServers": {
     "make-mcp": {
-      "command": "/path/to/make-mcp/bin/make-mcp.js",
+      "command": "npx",
+      "args": ["make-mcp"],
       "env": {
+        "LOG_LEVEL": "error",
+        "MAKE_API_KEY": "your_api_key_here",
+        "MAKE_TEAM_ID": "your_team_id",
+        "MAKE_API_URL": "https://eu1.make.com/api/v2"
+      }
+    }
+  }
+}
+```
+
+> **Note:** npx will download and cache the latest version automatically. The package includes a pre-built database with all Make.com module information — no setup required.
+
+---
+
+### Option B: Docker (Isolated & Reproducible) 🐳
+
+**Prerequisites:** Docker installed on your system
+
+```bash
+# Build the Docker image
+docker build -t make-mcp .
+
+# Test it works
+echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}},"id":1}' | docker run -i --rm make-mcp
+```
+
+**Claude Desktop config:**
+
+Basic configuration (documentation tools only):
+
+```json
+{
+  "mcpServers": {
+    "make-mcp": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm", "--init",
+        "-e", "LOG_LEVEL=error",
+        "make-mcp"
+      ]
+    }
+  }
+}
+```
+
+Full configuration (with Make.com deployment):
+
+```json
+{
+  "mcpServers": {
+    "make-mcp": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm", "--init",
+        "-e", "LOG_LEVEL=error",
+        "-e", "MAKE_API_KEY=your_api_key_here",
+        "-e", "MAKE_TEAM_ID=your_team_id",
+        "-e", "MAKE_API_URL=https://eu1.make.com/api/v2",
+        "make-mcp"
+      ]
+    }
+  }
+}
+```
+
+> **Important:** The `-i` flag is required for MCP stdio communication.
+
+---
+
+### Option C: Local Installation (For Development) 🛠️
+
+**Prerequisites:** [Node.js](https://nodejs.org/) and Git
+
+```bash
+# 1. Clone and install
+git clone <repo-url>
+cd make-mcp
+npm install
+
+# 2. Build
+npm run build
+
+# 3. Populate the module database (already done if using npm package)
+npm run scrape:prod
+
+# 4. Test it works
+npm start
+```
+
+**Claude Desktop config:**
+
+```json
+{
+  "mcpServers": {
+    "make-mcp": {
+      "command": "node",
+      "args": ["/absolute/path/to/make-mcp/dist/mcp/server.js"],
+      "env": {
+        "LOG_LEVEL": "error",
         "MAKE_API_KEY": "your_api_key_here",
         "MAKE_TEAM_ID": "your_team_id"
       }
@@ -79,7 +168,37 @@ Or using the CLI:
 }
 ```
 
-Then ask Claude things like:
+> **Note:** The Make.com API credentials are optional. Without them, you'll have access to all documentation, search, and validation tools. With them, you'll additionally get scenario deployment capabilities.
+
+---
+
+### Configuration File Locations
+
+| Platform | Path |
+|----------|------|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+
+**Restart Claude Desktop after updating configuration.**
+
+---
+
+### 💻 Connect Your IDE
+
+make-mcp works with any MCP-compatible client:
+
+- **Claude Desktop** — See configurations above
+- **VS Code (GitHub Copilot)** — Add to `.vscode/mcp.json`
+- **Cursor** — Add to MCP settings
+- **Claude Code** — Use `claude mcp add` command
+- **Windsurf** — Add to MCP configuration
+
+---
+
+## Usage
+
+Then ask your AI assistant things like:
 
 > "Create a Make scenario that watches a Slack channel for new messages and logs them to a Google Sheet"
 
@@ -87,7 +206,7 @@ Then ask Claude things like:
 
 > "Validate this scenario blueprint..."
 
-**Tip:** Start by calling `tools_documentation` to get a complete guide on how to use the server.
+**Tip:** The AI will automatically call `tools_documentation` first to understand how to use the server effectively.
 
 ## Available Tools
 
@@ -114,6 +233,15 @@ Then ask Claude things like:
 |-------------|-------------|
 | `make://apps` | List of all available apps with module counts |
 
+## CLI Usage
+
+```bash
+make-mcp              # Start the MCP server (stdio transport)
+make-mcp --scrape     # Populate/refresh the module database
+make-mcp --version    # Print version
+make-mcp --help       # Show help
+```
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
@@ -121,18 +249,27 @@ Then ask Claude things like:
 | `MAKE_API_KEY` | For deployment | — | Make.com API key |
 | `MAKE_API_URL` | No | `https://eu1.make.com/api/v2` | Make.com API base URL |
 | `MAKE_TEAM_ID` | For deployment | — | Default team ID for scenario deployment |
-| `DATABASE_PATH` | No | `./data/make-modules.db` | SQLite database file path |
+| `DATABASE_PATH` | No | `<package>/data/make-modules.db` | SQLite database file path |
 | `LOG_LEVEL` | No | `info` | Logging level: `debug`, `info`, `warn`, `error`, `silent` |
 
 ## Development
 
 ```bash
-npm run start:dev   # Start with tsx (no build needed)
-npm run dev         # Start with file watching
-npm run build       # Compile TypeScript
-npm run scrape      # Re-populate module database
-npm test            # Run all 42 tests
-npm run test:watch  # Run tests in watch mode
+npm run build         # Compile TypeScript + copy schema + add shebang
+npm run build:tsc     # TypeScript only (no packaging)
+npm run start:dev     # Start with tsx (no build needed)
+npm run dev           # Start with file watching
+npm run scrape        # Populate DB with tsx (dev)
+npm run scrape:prod   # Populate DB from compiled JS
+npm test              # Run all 42 tests
+npm run test:watch    # Run tests in watch mode
+```
+
+### Publishing to npm
+
+```bash
+npm run prepublishOnly   # Build + populate DB + verify (runs automatically on npm publish)
+npm publish              # Publish to npm registry
 ```
 
 ## Testing
@@ -155,20 +292,24 @@ src/
 │   └── server.ts          # MCP server with tools, prompts, resources
 ├── database/
 │   ├── schema.sql         # SQLite + FTS5 schema
-│   └── db.ts              # Database access layer
+│   └── db.ts              # Database access layer (npx-safe path resolution)
 ├── scrapers/
 │   └── scrape-modules.ts  # Module data population (224 modules)
 └── utils/
-    └── logger.ts          # Structured stderr logger
+    └── logger.ts          # Structured stderr-only logger
 bin/
-├── make-mcp.js            # CLI entry point
-└── postinstall.js         # Post-install setup
-tests/
-├── database.test.ts       # Database unit tests
-├── logger.test.ts         # Logger unit tests
-└── server.test.ts         # MCP integration tests
+├── make-mcp.js            # CLI entry point (npx, --help, --version, --scrape)
+└── postinstall.js         # Post-install verification
+scripts/
+├── build.js               # Build: tsc + copy schema + add shebang
+└── prepublish.js          # Publish prep: build + populate DB + verify
 data/
-└── make-modules.db        # SQLite database (generated)
+└── make-modules.db        # Pre-built SQLite database (bundled in npm package)
+tests/
+├── database.test.ts       # Database unit tests (14)
+├── logger.test.ts         # Logger unit tests (7)
+└── server.test.ts         # MCP integration tests (21)
+Dockerfile                 # Multi-stage Docker image
 ```
 
 ## Tech Stack

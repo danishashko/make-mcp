@@ -10,13 +10,17 @@
   },
   "files": [
     "dist/",
+    "data/make-modules.db",
     "bin/",
+    "scripts/",
     "src/database/schema.sql",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    ".env.example"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "node scripts/build.js",
+    "build:tsc": "tsc",
     "start": "node dist/mcp/server.js",
     "start:dev": "tsx src/mcp/server.ts",
     "scrape": "tsx src/scrapers/scrape-modules.ts",
@@ -24,6 +28,7 @@
     "dev": "tsx watch src/mcp/server.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "prepublishOnly": "node scripts/prepublish.js",
     "postinstall": "node bin/postinstall.js"
   },
   "keywords": [
