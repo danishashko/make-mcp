@@ -20,10 +20,36 @@ import { MakeDatabase } from '../database/db.js';
 import axios from 'axios';
 import dotenv from 'dotenv';
 import { logger } from '../utils/logger.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
 
-const VERSION = '1.3.1';
+function resolveServerVersion(): string {
+    try {
+        const __filename = fileURLToPath(import.meta.url);
+        const __dirname = path.dirname(__filename);
+        const packageJsonPath = path.resolve(__dirname, '..', '..', 'package.json');
+        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+        if (typeof packageJson.version === 'string' && packageJson.version.trim()) {
+            return packageJson.version;
+        }
+    } catch {
+        // Fallback below
+    }
+    return 'unknown';
+}
+
+const VERSION = resolveServerVersion();
+const MODULE_CACHE_TTL_MS = Number(process.env['MAKE_MODULE_CACHE_TTL_MS'] || 5 * 60 * 1000);
+
+type LiveModuleCatalog = {
+    fetchedAt: number;
+    ids: Set<string>;
+};
+
+const liveModuleCatalogCache = new Map<string, LiveModuleCatalog>();
 
 // ── Database ──
 // DATABASE_PATH env var overrides default; otherwise db.ts resolves
@@ -54,6 +80,166 @@ function fail(message: string) {
     };
 }
 
+function hasValidApiKey(): boolean {
+    const apiKey = process.env['MAKE_API_KEY'];
+    return Boolean(apiKey && apiKey !== 'your_api_key_here');
+}
+
+function getMakeBaseUrl(): string {
+    return process.env['MAKE_API_URL'] || 'https://eu1.make.com/api/v2';
+}
+
+function normalizeModuleId(moduleId: string): string {
+    return moduleId.toLowerCase().replace(/[^a-z0-9:]/g, '');
+}
+
+function tokenizeModulePart(value: string): string[] {
+    return value
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .replace(/[^a-zA-Z0-9]+/g, ' ')
+        .toLowerCase()
+        .split(/\s+/)
+        .filter(Boolean);
+}
+
+function extractAllFlowModules(flow: any[], pathPrefix: string = 'Flow'): Array<{ module: string; path: string }> {
+    const result: Array<{ module: string; path: string }> = [];
+    for (let i = 0; i < flow.length; i++) {
+        const node = flow[i];
+        const pos = `${pathPrefix}[${i}]`;
+        if (!node || typeof node !== 'object') continue;
+        if (typeof node.module === 'string' && node.module.trim()) {
+            result.push({ module: node.module, path: pos });
+        }
+        if (Array.isArray(node.routes)) {
+            for (let r = 0; r < node.routes.length; r++) {
+                const routeFlow = node.routes[r]?.flow;
+                if (Array.isArray(routeFlow)) {
+                    result.push(...extractAllFlowModules(routeFlow, `${pos}.routes[${r}]`));
+                }
+            }
+        }
+    }
+    return result;
+}
+
+function replaceModuleIdsInFlow(flow: any[], replacements: Map<string, string>) {
+    for (const node of flow) {
+        if (!node || typeof node !== 'object') continue;
+        if (typeof node.module === 'string' && replacements.has(node.module)) {
+            node.module = replacements.get(node.module);
+        }
+        if (Array.isArray(node.routes)) {
+            for (const route of node.routes) {
+                if (Array.isArray(route?.flow)) {
+                    replaceModuleIdsInFlow(route.flow, replacements);
+                }
+            }
+        }
+    }
+}
+
+async function fetchLiveModuleIds(baseUrl: string, apiKey: string): Promise<Set<string> | null> {
+    const cacheKey = `${baseUrl}`;
+    const cached = liveModuleCatalogCache.get(cacheKey);
+    if (cached && Date.now() - cached.fetchedAt < MODULE_CACHE_TTL_MS) {
+        return cached.ids;
+    }
+
+    try {
+        const response = await axios.get(`${baseUrl}/modules`, {
+            headers: { Authorization: `Token ${apiKey}` },
+            timeout: 12000,
+        });
+
+        const rawModules = Array.isArray(response.data?.modules)
+            ? response.data.modules
+            : Array.isArray(response.data)
+                ? response.data
+                : [];
+
+        const ids = new Set<string>();
+        for (const item of rawModules) {
+            if (typeof item === 'string') {
+                if (item.includes(':')) ids.add(item);
+                continue;
+            }
+            if (!item || typeof item !== 'object') continue;
+            const candidates = [item.id, item.module, item.key];
+            for (const candidate of candidates) {
+                if (typeof candidate === 'string' && candidate.includes(':')) {
+                    ids.add(candidate);
+                }
+            }
+        }
+
+        if (ids.size === 0) {
+            logger.warn('Live modules endpoint returned no parseable module IDs');
+            return null;
+        }
+
+        liveModuleCatalogCache.set(cacheKey, {
+            fetchedAt: Date.now(),
+            ids,
+        });
+
+        return ids;
+    } catch (error: any) {
+        logger.warn('Live module catalog fetch failed', {
+            baseUrl,
+            error: error?.message,
+            status: error?.response?.status,
+        });
+        return null;
+    }
+}
+
+function resolveClosestLiveModule(moduleId: string, liveIds: Set<string>): string | null {
+    if (liveIds.has(moduleId)) return moduleId;
+
+    const moduleNorm = normalizeModuleId(moduleId);
+    const normalizedMap = new Map<string, string[]>();
+    for (const liveId of liveIds) {
+        const key = normalizeModuleId(liveId);
+        const existing = normalizedMap.get(key);
+        if (existing) existing.push(liveId);
+        else normalizedMap.set(key, [liveId]);
+    }
+
+    const exactNormalized = normalizedMap.get(moduleNorm);
+    if (exactNormalized && exactNormalized.length === 1) {
+        return exactNormalized[0] ?? null;
+    }
+
+    const [appPart, modulePart] = moduleId.split(':');
+    if (!appPart || !modulePart) return null;
+
+    const targetTokens = new Set(tokenizeModulePart(modulePart));
+    const candidates = Array.from(liveIds).filter((id) => id.startsWith(`${appPart}:`));
+    if (candidates.length === 0) return null;
+
+    let best: { id: string; score: number } | null = null;
+    for (const candidate of candidates) {
+        const candidatePart = candidate.split(':')[1] || '';
+        const candidateTokens = tokenizeModulePart(candidatePart);
+        const overlap = candidateTokens.filter((t) => targetTokens.has(t)).length;
+        const score = overlap / Math.max(targetTokens.size, 1);
+        if (!best || score > best.score) {
+            best = { id: candidate, score };
+        }
+    }
+
+    if (!best || best.score < 0.5) return null;
+    return best.id;
+}
+
+function extractIm007ModuleId(errorData: any): string | null {
+    const body = typeof errorData === 'string' ? errorData : JSON.stringify(errorData || {});
+    const match = body.match(/Module\s+not\s+found[^A-Za-z0-9]+([A-Za-z0-9_.:-]+:[A-Za-z0-9_.:-]+)/i);
+    if (!match) return null;
+    return match[1] ?? null;
+}
+
 // ══════════════════════════════════════════════════════════════
 // TOOL: tools_documentation  (START HERE)
 // ══════════════════════════════════════════════════════════════
@@ -74,14 +260,16 @@ server.registerTool('tools_documentation', {
             '1. Call tools_documentation (this tool) to understand available capabilities',
             '2. Use search_modules to find the modules you need (e.g., "slack", "google sheets")',
             '3. Use get_module to get full parameter details for each module',
-            '4. Build a scenario blueprint JSON with a "flow" array of modules',
-            '5. Call validate_scenario to check for errors before deploying',
-            '6. Call create_scenario to deploy to Make.com (requires MAKE_API_KEY)',
+            '4. Optionally call check_account_compatibility to verify modules are available in your Make account/region',
+            '5. Build a scenario blueprint JSON with a "flow" array of modules',
+            '6. Call validate_scenario to check for errors before deploying',
+            '7. Call create_scenario to deploy to Make.com (requires MAKE_API_KEY)',
         ],
         tools: {
             tools_documentation: 'Returns this documentation. Call first.',
             search_modules: 'Full-text search across 200+ Make.com modules. Params: query (required), app (optional filter).',
             get_module: 'Get detailed module info with all parameters. Params: moduleId (e.g., "slack:ActionPostMessage").',
+            check_account_compatibility: 'Check whether modules are available in your current Make account/region using the live Make modules API.',
             validate_scenario: 'Validate a scenario blueprint before deployment. Checks structure, modules, and required params.',
             create_scenario: 'Deploy a validated scenario to Make.com via API. Requires MAKE_API_KEY.',
             search_templates: 'Search reusable scenario templates. Params: query (optional), category (optional).',
@@ -208,6 +396,90 @@ server.registerTool('get_module', {
 });
 
 // ══════════════════════════════════════════════════════════════
+// TOOL: check_account_compatibility
+// ══════════════════════════════════════════════════════════════
+
+server.registerTool('check_account_compatibility', {
+    title: 'Check Account Module Compatibility',
+    description:
+        'Checks whether module IDs are available in your current Make account and region. ' +
+        'Supports explicit module list and/or extracting modules from a scenario blueprint.',
+    inputSchema: {
+        moduleIds: z.array(z.string().min(1).max(200)).max(200).optional().describe('Module IDs to verify (e.g., ["slack:ActionPostMessage"])'),
+        blueprint: z.string().min(2).max(100000).optional().describe('Optional scenario blueprint JSON (stringified) to extract modules from'),
+    },
+}, async ({ moduleIds, blueprint }) => {
+    try {
+        const requested = new Set<string>((moduleIds || []).map((id) => id.trim()).filter(Boolean));
+
+        if (blueprint) {
+            let parsed: any;
+            try {
+                parsed = JSON.parse(blueprint);
+            } catch {
+                return fail('Invalid blueprint JSON. Ensure the blueprint is valid JSON.');
+            }
+
+            if (Array.isArray(parsed.flow)) {
+                for (const item of extractAllFlowModules(parsed.flow)) {
+                    requested.add(item.module);
+                }
+            }
+        }
+
+        if (requested.size === 0) {
+            return fail('Provide at least one module ID via moduleIds or include a blueprint with a flow array.');
+        }
+
+        if (!hasValidApiKey()) {
+            return ok({
+                checkedModules: Array.from(requested),
+                liveCatalogChecked: false,
+                compatible: null,
+                reason: 'MAKE_API_KEY not configured. Cannot verify account/region availability.',
+            });
+        }
+
+        const apiKey = process.env['MAKE_API_KEY']!;
+        const baseUrl = getMakeBaseUrl();
+        const liveIds = await fetchLiveModuleIds(baseUrl, apiKey);
+
+        if (!liveIds) {
+            return ok({
+                checkedModules: Array.from(requested),
+                liveCatalogChecked: false,
+                compatible: null,
+                reason: 'Live Make modules endpoint is unavailable for this environment.',
+            });
+        }
+
+        const results = Array.from(requested).map((moduleId) => {
+            const available = liveIds.has(moduleId);
+            const suggestedReplacement = available ? null : resolveClosestLiveModule(moduleId, liveIds);
+            return {
+                moduleId,
+                available,
+                suggestedReplacement,
+            };
+        });
+
+        const unavailable = results.filter((r) => !r.available);
+        return ok({
+            liveCatalogChecked: true,
+            makeApiUrl: baseUrl,
+            liveModuleCount: liveIds.size,
+            checkedCount: results.length,
+            incompatibleCount: unavailable.length,
+            compatible: unavailable.length === 0,
+            modules: results,
+        });
+    } catch (error: any) {
+        logger.error('check_account_compatibility failed', { error: error.message });
+        return fail(`Compatibility check failed: ${error.message}`);
+    }
+});
+
+// ══════════════════════════════════════════════════════════════
 // TOOL: validate_scenario
 // ══════════════════════════════════════════════════════════════
 
@@ -315,11 +587,56 @@ server.registerTool('validate_scenario', {
             warnings.push('Blueprint is missing "metadata" section. It will be auto-injected during deployment.');
         }
 
+        const compatibilityIssues: Array<{ module: string; suggestion?: string; paths: string[] }> = [];
+        let liveCatalogChecked = false;
+
+        if (parsed.flow && Array.isArray(parsed.flow) && hasValidApiKey()) {
+            const apiKey = process.env['MAKE_API_KEY']!;
+            const baseUrl = getMakeBaseUrl();
+            const liveIds = await fetchLiveModuleIds(baseUrl, apiKey);
+
+            if (liveIds) {
+                liveCatalogChecked = true;
+                const allModules = extractAllFlowModules(parsed.flow);
+                const byModule = new Map<string, string[]>();
+
+                for (const m of allModules) {
+                    const existing = byModule.get(m.module);
+                    if (existing) existing.push(m.path);
+                    else byModule.set(m.module, [m.path]);
+                }
+
+                for (const [moduleId, paths] of byModule.entries()) {
+                    if (liveIds.has(moduleId)) continue;
+                    const suggestion = resolveClosestLiveModule(moduleId, liveIds) || undefined;
+                    const issue: { module: string; suggestion?: string; paths: string[] } = {
+                        module: moduleId,
+                        paths,
+                    };
+                    if (suggestion) {
+                        issue.suggestion = suggestion;
+                    }
+                    compatibilityIssues.push(issue);
+                    if (suggestion) {
+                        errors.push(`Module "${moduleId}" is not available in this Make account/region. Suggested replacement: "${suggestion}".`);
+                    } else {
+                        errors.push(`Module "${moduleId}" is not available in this Make account/region.`);
+                    }
+                }
+            } else {
+                warnings.push('Live module compatibility check skipped (Make modules endpoint unavailable).');
+            }
+        }
+
         const result = {
             valid: errors.length === 0,
             errors,
             warnings,
             modulesValidated: validatedModules,
+            accountCompatibility: {
+                liveCatalogChecked,
+                incompatibleModules: compatibilityIssues,
+            },
             summary: errors.length === 0
                 ? `Blueprint is valid. ${validatedModules.length} module(s) checked, ${warnings.length} warning(s).`
                 : `${errors.length} error(s) found. Fix them before deploying.`,
@@ -366,6 +683,8 @@ server.registerTool('create_scenario', {
         if (!resolvedTeamId || isNaN(resolvedTeamId)) {
             return fail('Team ID required. Provide teamId parameter or set MAKE_TEAM_ID in .env file.');
         }
+
+        const baseUrl = getMakeBaseUrl();
 
         // Parse and auto-heal the blueprint
         let parsed: any;
@@ -425,34 +744,105 @@ server.registerTool('create_scenario', {
             healFlow(parsed.flow);
         }
 
-        const healedBlueprint = JSON.stringify(parsed);
+        // Account-aware module compatibility check and auto-remap
+        const liveIds = await fetchLiveModuleIds(baseUrl, apiKey);
+        const remappedModules: Array<{ from: string; to: string }> = [];
+        if (liveIds && Array.isArray(parsed.flow)) {
+            const byModule = new Set(extractAllFlowModules(parsed.flow).map((m) => m.module));
+            const replacements = new Map<string, string>();
+            const unavailable: string[] = [];
 
-        const baseUrl = process.env['MAKE_API_URL'] || 'https://eu1.make.com/api/v2';
-        const payload: any = {
-            teamId: resolvedTeamId,
-            name,
-            blueprint: healedBlueprint,
-            scheduling: JSON.stringify({ type: 'on-demand' }),
-        };
-        if (folderId) payload.folderId = folderId;
-
-        logger.info('create_scenario', { name, teamId: resolvedTeamId });
-
-        const response = await axios.post(
-            `${baseUrl}/scenarios?confirmed=true`,
-            payload,
-            {
-                headers: {
-                    'Authorization': `Token ${apiKey}`,
-                    'Content-Type': 'application/json',
-                },
-                timeout: 30000,
+            for (const moduleId of byModule) {
+                if (liveIds.has(moduleId)) continue;
+                const replacement = resolveClosestLiveModule(moduleId, liveIds);
+                if (replacement && replacement !== moduleId) {
+                    replacements.set(moduleId, replacement);
+                    remappedModules.push({ from: moduleId, to: replacement });
+                } else {
+                    unavailable.push(moduleId);
+                }
             }
-        );
+
+            if (replacements.size > 0) {
+                replaceModuleIdsInFlow(parsed.flow, replacements);
+                logger.info('create_scenario: auto-remapped modules', { remappedModules });
+            }
+
+            if (unavailable.length > 0) {
+                return fail(
+                    'Cannot deploy: one or more modules are not available for this Make account/region. ' +
+                    `Unavailable: ${unavailable.join(', ')}. Run validate_scenario to get suggestions.`
+                );
+            }
+        }
+
+        const buildPayload = () => {
+            const payload: any = {
+                teamId: resolvedTeamId,
+                name,
+                blueprint: JSON.stringify(parsed),
+                scheduling: JSON.stringify({ type: 'on-demand' }),
+            };
+            if (folderId) payload.folderId = folderId;
+            return payload;
+        };
+
+        logger.info('create_scenario', { name, teamId: resolvedTeamId, baseUrl });
+
+        let response: any;
+        let attempt = 0;
+        const maxAttempts = 2;
+
+        while (attempt < maxAttempts) {
+            attempt++;
+            try {
+                response = await axios.post(
+                    `${baseUrl}/scenarios?confirmed=true`,
+                    buildPayload(),
+                    {
+                        headers: {
+                            'Authorization': `Token ${apiKey}`,
+                            'Content-Type': 'application/json',
+                        },
+                        timeout: 30000,
+                    }
+                );
+                break;
+            } catch (error: any) {
+                const status = error.response?.status;
+                const data = error.response?.data;
+                const missingModule = extractIm007ModuleId(data);
+
+                if (status === 400 && missingModule && liveIds && attempt < maxAttempts) {
+                    const replacement = resolveClosestLiveModule(missingModule, liveIds);
+                    if (replacement && replacement !== missingModule && Array.isArray(parsed.flow)) {
+                        const replacements = new Map<string, string>([[missingModule, replacement]]);
+                        replaceModuleIdsInFlow(parsed.flow, replacements);
+                        remappedModules.push({ from: missingModule, to: replacement });
+                        logger.warn('create_scenario: retrying after IM007 remap', { missingModule, replacement, attempt });
+                        continue;
+                    }
+                }
+
+                throw error;
+            }
+        }
+
+        if (!response) {
+            return fail('Failed to create scenario after retry attempts.');
+        }
+
+        const createdScenario = response.data?.scenario || response.data;
+        const postWarnings: string[] = [];
+        if (createdScenario?.isinvalid === true) {
+            postWarnings.push('Scenario was created but marked invalid by Make. Check modules/connections in Make UI.');
+        }
 
         return ok({
             success: true,
             scenario: response.data,
+            remappedModules,
+            warnings: postWarnings,
             message: `Scenario "${name}" created successfully.`,
         });
     } catch (error: any) {

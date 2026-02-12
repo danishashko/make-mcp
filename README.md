@@ -12,13 +12,14 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that g
 - **🔍 200+ Modules** — Full-text search across 200+ Make.com modules (Slack, Gmail, Google Sheets, Notion, OpenAI, and 35+ more apps)
 - **📋 Module Details** — Retrieve parameters, types, descriptions, and usage docs for any module
 - **✅ Blueprint Validation** — Check scenarios for missing parameters, unknown modules, structural issues, and router sub-routes before deploying
+- **🛡️ Account-Aware Compatibility** — Verify module IDs against your live Make account/region before deployment to prevent "Module not found" scenarios
 - **🚀 Deploy to Make.com** — Push validated blueprints directly to Make.com via API
 - **🩹 Auto-Healing** — Automatically fixes LLM-generated blueprints: injects missing `metadata`, adds `designer` coordinates, strips unsupported properties like router `filter`
 - **🔀 Router Support** — Full support for `builtin:BasicRouter` with multiple routes and recursive validation
 - **📚 Scenario Templates** — Browse reusable scenario templates for common workflows
 - **📖 Guided Prompts** — MCP prompts for guided scenario building and module exploration
 - **📊 Resource Catalog** — MCP resources for browsing available apps
-- **🧪 42 Tests** — Unit + integration test suite with Vitest
+- **🧪 43 Tests** — Unit + integration test suite with Vitest
 - **⚡ Fast Response** — Optimized SQLite with FTS5 full-text search
 
 ---
@@ -219,6 +220,7 @@ Then ask your AI assistant things like:
 | `tools_documentation` | **START HERE** — Returns comprehensive documentation for all tools, prompts, and resources |
 | `search_modules` | Full-text search across 200+ Make.com modules |
 | `get_module` | Get detailed module info with parameters and docs |
+| `check_account_compatibility` | Check if modules are available in your current Make account/region (with suggestions) |
 | `validate_scenario` | Validate a scenario blueprint before deployment |
 | `create_scenario` | Deploy a scenario to Make.com via API |
 | `search_templates` | Search reusable scenario templates |
@@ -234,6 +236,7 @@ The `create_scenario` tool automatically fixes common issues in LLM-generated bl
 | Missing `metadata.designer` on modules | Adds `{ x: 0, y: 0 }` coordinates |
 | Router `filter` in route objects | Strips unsupported `filter` property (configure filters in Make.com UI) |
 | Missing `version` on modules | Left unset — Make.com auto-resolves the latest installed version |
+| Catalog mismatch (`IM007`, module not available) | Checks live modules in your account/region, auto-remaps close matches, retries deploy once |
 
 > **Tip:** Do NOT hardcode `"version": 1` on modules. Some apps (e.g., HTTP) are on v4+ and specifying the wrong version causes "Module not found" errors.
 
@@ -268,6 +271,7 @@ make-mcp-server --help       # Show help
 | `MAKE_TEAM_ID` | For deployment | — | Default team ID for scenario deployment |
 | `DATABASE_PATH` | No | `<package>/data/make-modules.db` | SQLite database file path |
 | `LOG_LEVEL` | No | `info` | Logging level: `debug`, `info`, `warn`, `error`, `silent` |
+| `MAKE_MODULE_CACHE_TTL_MS` | No | `300000` | Cache TTL for live module catalog checks (milliseconds) |
 
 ## Development
 
@@ -278,7 +282,8 @@ npm run start:dev     # Start with tsx (no build needed)
 npm run dev           # Start with file watching
 npm run scrape        # Populate DB with tsx (dev)
 npm run scrape:prod   # Populate DB from compiled JS
-npm test              # Run all 42 tests
+npm run smoke:compat  # One-command account compatibility + validation smoke check
+npm test              # Run all 43 tests
 npm run test:watch    # Run tests in watch mode
 ```
 
@@ -291,15 +296,38 @@ npm publish              # Publish to npm registry
 
 ## Testing
 
-The test suite includes 42 tests across 3 files:
+The test suite includes 43 tests across 3 files:
 
 - **Database tests** (14 tests) — Insert, search, template operations, FTS5 queries
 - **Logger tests** (7 tests) — Stderr-only output, log levels, data serialization
-- **Server integration tests** (21 tests) — Full MCP protocol compliance via SDK client
+- **Server integration tests** (22 tests) — Full MCP protocol compliance via SDK client
 
 ```bash
 npm test
 ```
+
+### Fast Verification (2-3 minutes)
+
+Use this when you just changed validation/deploy logic and want confidence quickly:
+
+```bash
+# 1) Fast regression check
+npm test
+
+# 2) One-command smoke check (compatibility + validation)
+npm run smoke:compat
+
+# 3) (Optional) Manual MCP exploration
+npm run start:dev
+```
+
+Then in your MCP client (Claude/Cursor/Copilot), run this sequence:
+
+1. `check_account_compatibility` with a known module, e.g. `gateway:CustomWebHook`
+2. `validate_scenario` with your blueprint
+3. `create_scenario` only if compatibility is good
+
+If step 1 reports incompatible modules, use the suggested replacement IDs before deploying.
 
 ## Architecture
 
@@ -319,13 +347,14 @@ bin/
 └── postinstall.js         # Post-install verification
 scripts/
 ├── build.js               # Build: tsc + copy schema + add shebang
-└── prepublish.js          # Publish prep: build + populate DB + verify
+├── prepublish.js          # Publish prep: build + populate DB + verify
+└── smoke-compat.js        # Fast local smoke test for module compatibility + validation
 data/
 └── make-modules.db        # Pre-built SQLite database (bundled in npm package)
 tests/
 ├── database.test.ts       # Database unit tests (14)
 ├── logger.test.ts         # Logger unit tests (7)
-└── server.test.ts         # MCP integration tests (21)
+└── server.test.ts         # MCP integration tests (22)
 Dockerfile                 # Multi-stage Docker image
 ```
 

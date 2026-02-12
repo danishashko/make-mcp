@@ -80,11 +80,12 @@ describe('MCP Server Protocol', () => {
         expect(toolNames).toContain('tools_documentation');
         expect(toolNames).toContain('search_modules');
         expect(toolNames).toContain('get_module');
+        expect(toolNames).toContain('check_account_compatibility');
         expect(toolNames).toContain('validate_scenario');
         expect(toolNames).toContain('create_scenario');
         expect(toolNames).toContain('search_templates');
         expect(toolNames).toContain('list_apps');
-        expect(result.tools.length).toBe(7);
+        expect(result.tools.length).toBe(8);
     });
 
     it('should call tools_documentation', async () => {
@@ -148,6 +149,16 @@ describe('MCP Server Protocol', () => {
         expect((result.content as any[])[0].text).toContain('Module not found');
     });
 
+    it('should check account compatibility for module ids', async () => {
+        const result = await client.callTool({
+            name: 'check_account_compatibility',
+            arguments: { moduleIds: ['gateway:CustomWebHook'] },
+        });
+
+        const data = JSON.parse((result.content as any[])[0].text);
+        expect(data.checkedModules || data.modules).toBeDefined();
+    });
+
     it('should validate a correct blueprint', async () => {
         const blueprint = JSON.stringify({
             flow: [
@@ -165,6 +176,8 @@ describe('MCP Server Protocol', () => {
         expect(data.valid).toBe(true);
         expect(data.errors).toEqual([]);
         expect(data.modulesValidated.length).toBe(2);
+        expect(data.accountCompatibility).toBeDefined();
+        expect(Array.isArray(data.accountCompatibility.incompatibleModules)).toBe(true);
     });
 
     it('should detect unknown modules in blueprint', async () => {
