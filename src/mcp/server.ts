@@ -158,6 +158,25 @@ function stripModuleVersionsInFlow(flow: any[]): number {
     return removed;
 }
 
+function setModuleVersionInFlow(flow: any[], moduleId: string, version: number): number {
+    let updated = 0;
+    for (const node of flow) {
+        if (!node || typeof node !== 'object') continue;
+        if (node.module === moduleId) {
+            node.version = version;
+            updated++;
+        }
+        if (Array.isArray(node.routes)) {
+            for (const route of node.routes) {
+                if (Array.isArray(route?.flow)) {
+                    updated += setModuleVersionInFlow(route.flow, moduleId, version);
+                }
+            }
+        }
+    }
+    return updated;
+}
+
 async function fetchLiveModuleIds(baseUrl: string, apiKey: string): Promise<Set<string> | null> {
     const cacheKey = `${baseUrl}`;
     const cached = liveModuleCatalogCache.get(cacheKey);
@@ -257,6 +276,71 @@ function extractIm007ModuleId(errorData: any): string | null {
     const match = body.match(/Module\s+not\s+found[^A-Za-z0-9]+([A-Za-z0-9_.:-]+:[A-Za-z0-9_.:-]+)/i);
     if (!match) return null;
     return match[1] ?? null;
+}
+
+function extractIm007Version(errorData: any): number | null {
+    const body = typeof errorData === 'string' ? errorData : JSON.stringify(errorData || {});
+    const match = body.match(/version\s+'(\d+)'/i);
+    if (!match) return null;
+    const parsed = Number(match[1]);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return parsed;
+}
+
+function parseSchedulingFromScheduleModule(module: any): any {
+    const intervalValue = module?.parameters?.interval;
+    const intervalText = typeof intervalValue === 'string' ? intervalValue.toLowerCase() : '';
+
+    const parseMinutes = (text: string): number | null => {
+        const minuteMatch = text.match(/(\d+)\s*min/);
+        if (!minuteMatch) return null;
+        const parsed = Number(minuteMatch[1]);
+        if (!Number.isFinite(parsed) || parsed <= 0) return null;
+        return parsed;
+    };
+
+    if (intervalText.includes('day')) {
+        return { type: 'indefinitely', interval: 86400 };
+    }
+    if (intervalText.includes('week')) {
+        return { type: 'indefinitely', interval: 604800 };
+    }
+    if (intervalText.includes('month')) {
+        return { type: 'indefinitely', interval: 2592000 };
+    }
+    if (intervalText.includes('hour')) {
+        return { type: 'indefinitely', interval: 3600 };
+    }
+
+    const minutes = parseMinutes(intervalText);
+    if (minutes !== null) {
+        return { type: 'indefinitely', interval: minutes * 60 };
+    }
+
+    return { type: 'indefinitely', interval: 900 };
+}
+
+function normalizeSchedulingModules(flow: any[]): {
+    normalizedFlow: any[];
+    scheduling: any | null;
+    removedModules: string[];
+} {
+    const removedModules: string[] = [];
+    let scheduling: any | null = null;
+
+    const normalizedFlow = flow.filter((mod) => {
+        if (!mod || typeof mod !== 'object') return true;
+        if (mod.module === 'builtin:Schedule') {
+            if (!scheduling) {
+                scheduling = parseSchedulingFromScheduleModule(mod);
+            }
+            removedModules.push('builtin:Schedule');
+            return false;
+        }
+        return true;
+    });
+
+    return { normalizedFlow, scheduling, removedModules };
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -717,6 +801,26 @@ server.registerTool('create_scenario', {
             return fail('Invalid blueprint JSON. Run validate_scenario first.');
         }
 
+        let schedulingConfig: any = { type: 'on-demand' };
+        const normalizationWarnings: string[] = [];
+
+        if (Array.isArray(parsed.flow)) {
+            const normalized = normalizeSchedulingModules(parsed.flow);
+            parsed.flow = normalized.normalizedFlow;
+            if (normalized.scheduling) {
+                schedulingConfig = normalized.scheduling;
+            }
+            if (normalized.removedModules.length > 0) {
+                normalizationWarnings.push(
+                    `Converted ${normalized.removedModules.join(', ')} to scenario scheduling to avoid module compatibility issues.`
+                );
+                logger.info('create_scenario: converted schedule module to scenario scheduling', {
+                    schedulingConfig,
+                    removedModules: normalized.removedModules,
+                });
+            }
+        }
+
         // Auto-inject metadata if missing (Make.com requires it)
         if (!parsed.metadata) {
             parsed.metadata = {
@@ -814,7 +918,7 @@ server.registerTool('create_scenario', {
                 teamId: resolvedTeamId,
                 name,
                 blueprint: JSON.stringify(parsed),
-                scheduling: JSON.stringify({ type: 'on-demand' }),
+                scheduling: JSON.stringify(schedulingConfig),
             };
             if (folderId) payload.folderId = folderId;
             return payload;
@@ -824,8 +928,9 @@ server.registerTool('create_scenario', {
 
         let response: any;
         let attempt = 0;
-        const maxAttempts = 2;
+        const maxAttempts = 5;
         let strippedVersionsForRetry = false;
+        const triedVersionFallbacks = new Set<string>();
 
         while (attempt < maxAttempts) {
             attempt++;
@@ -846,6 +951,7 @@ server.registerTool('create_scenario', {
                 const status = error.response?.status;
                 const data = error.response?.data;
                 const missingModule = extractIm007ModuleId(data);
+                const missingVersion = extractIm007Version(data);
 
                 if (status === 400 && missingModule && liveIds && attempt < maxAttempts) {
                     const replacement = resolveClosestLiveModule(missingModule, liveIds);
@@ -855,6 +961,25 @@ server.registerTool('create_scenario', {
                         remappedModules.push({ from: missingModule, to: replacement });
                         logger.warn('create_scenario: retrying after IM007 remap', { missingModule, replacement, attempt });
                         continue;
+                    }
+                }
+
+                if (status === 400 && data?.code === 'IM007' && missingModule && missingVersion && missingVersion > 1 && attempt < maxAttempts && Array.isArray(parsed.flow)) {
+                    const fallbackVersion = missingVersion - 1;
+                    const fallbackKey = `${missingModule}@${fallbackVersion}`;
+                    if (!triedVersionFallbacks.has(fallbackKey)) {
+                        const updated = setModuleVersionInFlow(parsed.flow, missingModule, fallbackVersion);
+                        if (updated > 0) {
+                            triedVersionFallbacks.add(fallbackKey);
+                            logger.warn('create_scenario: retrying IM007 with forced lower module version', {
+                                module: missingModule,
+                                fromVersion: missingVersion,
+                                toVersion: fallbackVersion,
+                                updatedModules: updated,
+                                attempt,
+                            });
+                            continue;
+                        }
                     }
                 }
 
@@ -884,6 +1009,7 @@ server.registerTool('create_scenario', {
 
         const createdScenario = response.data?.scenario || response.data;
         const postWarnings: string[] = [];
+        postWarnings.push(...normalizationWarnings);
         if (createdScenario?.isinvalid === true) {
             postWarnings.push('Scenario was created but marked invalid by Make. Check modules/connections in Make UI.');
         }
