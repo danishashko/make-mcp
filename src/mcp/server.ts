@@ -24,7 +24,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 function resolveServerVersion(): string {
     try {
