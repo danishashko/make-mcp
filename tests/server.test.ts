@@ -215,6 +215,23 @@ describe('MCP Server Protocol', () => {
         expect(data.errors.some((e: string) => e.includes('Missing required parameter'))).toBe(true);
     });
 
+    it('should warn when module version is pinned in blueprint', async () => {
+        const blueprint = JSON.stringify({
+            flow: [
+                { id: 1, module: 'gateway:CustomWebHook', version: 2, parameters: { name: 'Test' } },
+            ],
+        });
+
+        const result = await client.callTool({
+            name: 'validate_scenario',
+            arguments: { blueprint },
+        });
+
+        const data = JSON.parse((result.content as any[])[0].text);
+        expect(Array.isArray(data.warnings)).toBe(true);
+        expect(data.warnings.some((w: string) => w.includes('Module "version" is set in blueprint'))).toBe(true);
+    });
+
     it('should return isError for invalid JSON in blueprint', async () => {
         const result = await client.callTool({
             name: 'validate_scenario',

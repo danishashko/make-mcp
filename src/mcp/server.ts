@@ -139,6 +139,25 @@ function replaceModuleIdsInFlow(flow: any[], replacements: Map<string, string>) 
     }
 }
 
+function stripModuleVersionsInFlow(flow: any[]): number {
+    let removed = 0;
+    for (const node of flow) {
+        if (!node || typeof node !== 'object') continue;
+        if (node.version !== undefined) {
+            delete node.version;
+            removed++;
+        }
+        if (Array.isArray(node.routes)) {
+            for (const route of node.routes) {
+                if (Array.isArray(route?.flow)) {
+                    removed += stripModuleVersionsInFlow(route.flow);
+                }
+            }
+        }
+    }
+    return removed;
+}
+
 async function fetchLiveModuleIds(baseUrl: string, apiKey: string): Promise<Set<string> | null> {
     const cacheKey = `${baseUrl}`;
     const cached = liveModuleCatalogCache.get(cacheKey);
@@ -531,6 +550,10 @@ server.registerTool('validate_scenario', {
                     continue;
                 }
 
+                if (flowModule.version !== undefined) {
+                    warnings.push(`${pos} (${flowModule.module}): Module "version" is set in blueprint. This can trigger IM007; omit module version to let Make resolve correctly.`);
+                }
+
                 validatedModules.push(flowModule.module);
 
                 // Check required parameters — skip "routes" for Router (it's a top-level flow property)
@@ -721,6 +744,11 @@ server.registerTool('create_scenario', {
         const healFlow = (flow: any[]) => {
             for (const mod of flow) {
                 if (!mod || typeof mod !== 'object') continue;
+                // Always strip module versions coming from imported/generated blueprints.
+                // A pinned version often causes IM007 when the account/region has different module revisions.
+                if (mod.version !== undefined) {
+                    delete mod.version;
+                }
                 if (!mod.metadata) mod.metadata = { designer: { x: 0, y: 0 } };
                 else if (!mod.metadata.designer) mod.metadata.designer = { x: 0, y: 0 };
                 // Recurse into router routes
@@ -742,6 +770,11 @@ server.registerTool('create_scenario', {
         };
         if (parsed.flow && Array.isArray(parsed.flow)) {
             healFlow(parsed.flow);
+        }
+
+        const removedVersionsCount = Array.isArray(parsed.flow) ? stripModuleVersionsInFlow(parsed.flow) : 0;
+        if (removedVersionsCount > 0) {
+            logger.info('create_scenario: stripped module version fields', { removedVersionsCount });
         }
 
         // Account-aware module compatibility check and auto-remap
@@ -792,6 +825,7 @@ server.registerTool('create_scenario', {
         let response: any;
         let attempt = 0;
         const maxAttempts = 2;
+        let strippedVersionsForRetry = false;
 
         while (attempt < maxAttempts) {
             attempt++;
@@ -821,6 +855,22 @@ server.registerTool('create_scenario', {
                         remappedModules.push({ from: missingModule, to: replacement });
                         logger.warn('create_scenario: retrying after IM007 remap', { missingModule, replacement, attempt });
                         continue;
+                    }
+                }
+
+                if (status === 400 && attempt < maxAttempts && Array.isArray(parsed.flow) && !strippedVersionsForRetry) {
+                    const data = error.response?.data;
+                    const code = data?.code;
+                    if (code === 'IM007') {
+                        const stripped = stripModuleVersionsInFlow(parsed.flow);
+                        if (stripped > 0) {
+                            strippedVersionsForRetry = true;
+                            logger.warn('create_scenario: retrying after IM007 by stripping module versions', {
+                                stripped,
+                                attempt,
+                            });
+                            continue;
+                        }
                     }
                 }
 
@@ -857,6 +907,15 @@ server.registerTool('create_scenario', {
         }
         if (status === 403) {
             return fail('Access denied. Check your API key permissions and team ID.');
+        }
+        if (status === 400 && data?.code === 'IM007') {
+            const detail = data?.detail || data?.message || 'Invalid blueprint';
+            return fail(
+                `Failed to create scenario (HTTP 400): ${JSON.stringify(data, null, 2)}\n` +
+                `Hint: IM007 usually means module ID/version incompatibility for this account/region. ` +
+                `Use check_account_compatibility first and verify MAKE_API_URL matches your Make region (eu1/eu2/us1/us2). ` +
+                `Detail: ${detail}`
+            );
         }
         // Include full response data for debugging 400 errors
         const detail = data ? JSON.stringify(data, null, 2) : msg;
