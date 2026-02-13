@@ -51,6 +51,135 @@ type LiveModuleCatalog = {
 
 const liveModuleCatalogCache = new Map<string, LiveModuleCatalog>();
 
+// ══════════════════════════════════════════════════════════════
+// VERIFIED MODULE REGISTRY
+// Modules confirmed to work via the Make API, with their correct versions.
+// Derived from systematic live probing against Make.com API.
+// NOTE: Availability may vary by zone/plan but versions are generally universal.
+// ══════════════════════════════════════════════════════════════
+
+const VERIFIED_MODULE_VERSIONS: Record<string, number> = {
+    // JSON
+    'json:ParseJSON': 1,
+    'json:CreateJSON': 1,
+    'json:TransformToJSON': 1,
+    // Gateway (Webhooks)
+    'gateway:CustomWebHook': 1,
+    'gateway:WebhookRespond': 1,
+    // Router & Flow Control
+    'builtin:BasicRouter': 1,
+    'builtin:BasicFeeder': 1,
+    'builtin:BasicAggregator': 1,
+    // HTTP
+    'http:ActionSendData': 3,
+    'http:ActionSendDataBasicAuth': 3,
+    'http:ActionGetFile': 3,
+    'http:ActionSendDataAdvanced': 3,
+    // Google Sheets (basic CRUD actions)
+    'google-sheets:ActionAddRow': 1,
+    'google-sheets:ActionUpdateRow': 1,
+    'google-sheets:ActionDeleteRow': 1,
+    // Utilities
+    'util:SetVariable': 1,
+    'util:GetVariable': 1,
+    'util:SetMultipleVariables': 1,
+    // Slack
+    'slack:ActionPostMessage': 1,
+    // Datastore
+    'datastore:ActionGetRecord': 1,
+    'datastore:ActionAddRecord': 1,
+    'datastore:ActionUpdateRecord': 1,
+    'datastore:ActionDeleteRecord': 1,
+    'datastore:ActionSearchRecords': 1,
+};
+
+// Modules known to be problematic via API deployment with alternatives
+const PROBLEMATIC_MODULES: Record<string, { alternative: string; reason: string }> = {
+    'openai:ActionCreateCompletion': {
+        alternative: 'http:ActionSendData',
+        reason: 'OpenAI modules often fail via API deployment. Use http:ActionSendData (v3) to call the OpenAI API directly at https://api.openai.com/v1/chat/completions.',
+    },
+    'openai-gpt-3:ActionCreateCompletion': {
+        alternative: 'http:ActionSendData',
+        reason: 'OpenAI modules often fail via API deployment. Use http:ActionSendData (v3) to call the OpenAI API directly.',
+    },
+    'openai-gpt-3:ActionCreateChatCompletion': {
+        alternative: 'http:ActionSendData',
+        reason: 'OpenAI modules often fail via API deployment. Use http:ActionSendData (v3) to call the OpenAI API directly.',
+    },
+    'openai:ActionAnalyzeImages': {
+        alternative: 'http:ActionSendData',
+        reason: 'OpenAI modules often fail via API deployment. Use http:ActionSendData (v3) to call the OpenAI API directly.',
+    },
+    'openai:ActionCreateImage': {
+        alternative: 'http:ActionSendData',
+        reason: 'OpenAI image modules often fail via API deployment. Use http:ActionSendData (v3) to call the OpenAI DALL-E API directly.',
+    },
+    'email:ActionSendEmail': {
+        alternative: 'microsoft-smtp-imap:ActionSendAnEmail',
+        reason: 'Generic email module may not be available. Use a specific provider module (Gmail, Microsoft SMTP/IMAP) or http:ActionSendData with an email API.',
+    },
+    'ai-provider:ActionChatCompletion': {
+        alternative: 'http:ActionSendData',
+        reason: 'AI Provider module may not be deployable via API. Use http:ActionSendData to call AI APIs directly.',
+    },
+};
+
+/**
+ * Inject known-good versions for verified modules.
+ * For modules in the verified registry, sets the correct version.
+ * For unknown modules, strips the version to let Make resolve.
+ * Returns the number of versions injected and stripped.
+ */
+function injectVerifiedVersions(flow: any[]): { injected: number; stripped: number } {
+    let injected = 0;
+    let stripped = 0;
+    for (const node of flow) {
+        if (!node || typeof node !== 'object') continue;
+        if (typeof node.module === 'string') {
+            const knownVersion = VERIFIED_MODULE_VERSIONS[node.module];
+            if (knownVersion !== undefined) {
+                if (node.version !== knownVersion) {
+                    node.version = knownVersion;
+                    injected++;
+                }
+            } else if (node.version !== undefined) {
+                // Unknown module — strip version to let Make resolve
+                delete node.version;
+                stripped++;
+            }
+        }
+        if (Array.isArray(node.routes)) {
+            for (const route of node.routes) {
+                if (Array.isArray(route?.flow)) {
+                    const sub = injectVerifiedVersions(route.flow);
+                    injected += sub.injected;
+                    stripped += sub.stripped;
+                }
+            }
+        }
+    }
+    return { injected, stripped };
+}
+
+/**
+ * Check if a module ID matches a known problematic module.
+ * Returns the entry if found, or undefined.
+ */
+function getProblematicModuleInfo(moduleId: string): { alternative: string; reason: string } | undefined {
+    // Direct match
+    if (PROBLEMATIC_MODULES[moduleId]) return PROBLEMATIC_MODULES[moduleId];
+    // Check by app prefix for broad matches (e.g., any openai:* module)
+    const appPrefix = moduleId.split(':')[0];
+    if (appPrefix === 'openai' || appPrefix === 'openai-gpt-3') {
+        return {
+            alternative: 'http:ActionSendData',
+            reason: `OpenAI modules (${moduleId}) often fail via API deployment. Use http:ActionSendData (v3) to call the OpenAI API directly.`,
+        };
+    }
+    return undefined;
+}
+
 // ── Database ──
 // DATABASE_PATH env var overrides default; otherwise db.ts resolves
 // to <packageRoot>/data/make-modules.db automatically.
@@ -410,9 +539,11 @@ server.registerTool('tools_documentation', {
             'First module in a scenario should be a trigger',
             'Parameters reference previous modules with {{moduleId.field}} syntax',
             'Always validate before deploying to catch errors early',
-            'Do NOT set "version" on modules — Make.com auto-resolves the latest installed version',
+            'Module versions are auto-managed: verified modules get their known-good version, unknown modules have versions stripped',
             'Router filters cannot be set via the API — deploy without filters, then configure them in the Make.com UI',
-            'The create_scenario tool auto-heals missing metadata, designer coords, and strips unsupported properties',
+            'The create_scenario tool auto-heals missing metadata, designer coords, and injects correct module versions',
+            'OpenAI and some AI modules may not be deployable via API — use http:ActionSendData to call AI APIs directly',
+            'Use check_account_compatibility BEFORE deploying to identify problematic modules and get alternatives',
         ],
     };
 
@@ -535,11 +666,35 @@ server.registerTool('check_account_compatibility', {
         }
 
         if (!hasValidApiKey()) {
+            // Without API key, use verified registry for offline compatibility check
+            const results = Array.from(requested).map((moduleId) => {
+                const verifiedVersion = VERIFIED_MODULE_VERSIONS[moduleId];
+                const problemInfo = getProblematicModuleInfo(moduleId);
+                return {
+                    moduleId,
+                    verified: verifiedVersion !== undefined,
+                    recommendedVersion: verifiedVersion ?? null,
+                    problematic: problemInfo !== undefined,
+                    warning: problemInfo?.reason ?? null,
+                    alternative: problemInfo?.alternative ?? null,
+                };
+            });
+
+            const problematic = results.filter((r) => r.problematic);
+            const unverified = results.filter((r) => !r.verified && !r.problematic);
+
             return ok({
                 checkedModules: Array.from(requested),
                 liveCatalogChecked: false,
-                compatible: null,
-                reason: 'MAKE_API_KEY not configured. Cannot verify account/region availability.',
+                verifiedRegistryChecked: true,
+                compatible: problematic.length === 0 ? null : false,
+                modules: results,
+                summary: [
+                    `${results.filter(r => r.verified).length} module(s) have verified versions.`,
+                    problematic.length > 0 ? `${problematic.length} module(s) are known to be problematic via API.` : '',
+                    unverified.length > 0 ? `${unverified.length} module(s) are unverified — they may or may not work.` : '',
+                    'MAKE_API_KEY not configured — cannot verify against live account.',
+                ].filter(Boolean).join(' '),
             });
         }
 
@@ -547,34 +702,48 @@ server.registerTool('check_account_compatibility', {
         const baseUrl = getMakeBaseUrl();
         const liveIds = await fetchLiveModuleIds(baseUrl, apiKey);
 
-        if (!liveIds) {
-            return ok({
-                checkedModules: Array.from(requested),
-                liveCatalogChecked: false,
-                compatible: null,
-                reason: 'Live Make modules endpoint is unavailable for this environment.',
-            });
-        }
-
+        // Live endpoint is typically unavailable (Make doesn't expose /modules publicly).
+        // Fall back to verified registry for compatibility assessment.
         const results = Array.from(requested).map((moduleId) => {
-            const available = liveIds.has(moduleId);
-            const suggestedReplacement = available ? null : resolveClosestLiveModule(moduleId, liveIds);
+            const verifiedVersion = VERIFIED_MODULE_VERSIONS[moduleId];
+            const problemInfo = getProblematicModuleInfo(moduleId);
+            const liveAvailable = liveIds ? liveIds.has(moduleId) : null;
+            const suggestedReplacement = liveIds && !liveAvailable
+                ? resolveClosestLiveModule(moduleId, liveIds)
+                : null;
+
             return {
                 moduleId,
-                available,
-                suggestedReplacement,
+                liveAvailable,
+                verified: verifiedVersion !== undefined,
+                recommendedVersion: verifiedVersion ?? null,
+                problematic: problemInfo !== undefined,
+                warning: problemInfo?.reason ?? null,
+                alternative: problemInfo?.alternative ?? suggestedReplacement ?? null,
             };
         });
 
-        const unavailable = results.filter((r) => !r.available);
+        const problematic = results.filter((r) => r.problematic);
+        const unverified = results.filter((r) => !r.verified && !r.problematic);
+        const verified = results.filter((r) => r.verified);
+
         return ok({
-            liveCatalogChecked: true,
+            liveCatalogChecked: liveIds !== null,
+            verifiedRegistryChecked: true,
             makeApiUrl: baseUrl,
-            liveModuleCount: liveIds.size,
+            liveModuleCount: liveIds?.size ?? 0,
             checkedCount: results.length,
-            incompatibleCount: unavailable.length,
-            compatible: unavailable.length === 0,
+            verifiedCount: verified.length,
+            problematicCount: problematic.length,
+            unverifiedCount: unverified.length,
+            compatible: problematic.length === 0 ? (unverified.length === 0 ? true : null) : false,
             modules: results,
+            summary: [
+                `${verified.length} module(s) have verified versions.`,
+                problematic.length > 0 ? `${problematic.length} module(s) are known to be problematic — see warnings and alternatives.` : '',
+                unverified.length > 0 ? `${unverified.length} module(s) are unverified — deployment will attempt them but they may fail.` : '',
+                !liveIds ? 'Live module endpoint unavailable — using verified registry only.' : '',
+            ].filter(Boolean).join(' '),
         });
     } catch (error: any) {
         logger.error('check_account_compatibility failed', { error: error.message });
@@ -635,7 +804,26 @@ server.registerTool('validate_scenario', {
                 }
 
                 if (flowModule.version !== undefined) {
-                    warnings.push(`${pos} (${flowModule.module}): Module "version" is set in blueprint. This can trigger IM007; omit module version to let Make resolve correctly.`);
+                    const verifiedVersion = VERIFIED_MODULE_VERSIONS[flowModule.module];
+                    if (verifiedVersion !== undefined && flowModule.version !== verifiedVersion) {
+                        warnings.push(`${pos} (${flowModule.module}): Version ${flowModule.version} specified but verified working version is ${verifiedVersion}. create_scenario will auto-correct this.`);
+                    } else if (verifiedVersion === undefined) {
+                        warnings.push(`${pos} (${flowModule.module}): Module "version" is set in blueprint. This can trigger IM007 for unverified modules; create_scenario will strip it.`);
+                    }
+                }
+
+                // Check against known problematic modules
+                const problemInfo = getProblematicModuleInfo(flowModule.module);
+                if (problemInfo) {
+                    warnings.push(`${pos} (${flowModule.module}): ${problemInfo.reason} Alternative: ${problemInfo.alternative}`);
+                }
+
+                // Check against verified registry for version recommendations
+                const verifiedVersion = VERIFIED_MODULE_VERSIONS[flowModule.module];
+                if (verifiedVersion !== undefined && flowModule.version === undefined) {
+                    // Good — version will be auto-injected during deployment
+                } else if (verifiedVersion === undefined && !problemInfo) {
+                    warnings.push(`${pos} (${flowModule.module}): Not in verified registry — may require manual verification.`);
                 }
 
                 validatedModules.push(flowModule.module);
@@ -694,44 +882,61 @@ server.registerTool('validate_scenario', {
             warnings.push('Blueprint is missing "metadata" section. It will be auto-injected during deployment.');
         }
 
-        const compatibilityIssues: Array<{ module: string; suggestion?: string; paths: string[] }> = [];
+        const compatibilityIssues: Array<{ module: string; suggestion?: string; problematic?: boolean; paths: string[] }> = [];
         let liveCatalogChecked = false;
+        let verifiedRegistryChecked = false;
 
-        if (parsed.flow && Array.isArray(parsed.flow) && hasValidApiKey()) {
-            const apiKey = process.env['MAKE_API_KEY']!;
-            const baseUrl = getMakeBaseUrl();
-            const liveIds = await fetchLiveModuleIds(baseUrl, apiKey);
+        if (parsed.flow && Array.isArray(parsed.flow)) {
+            const allModules = extractAllFlowModules(parsed.flow);
+            const byModule = new Map<string, string[]>();
 
-            if (liveIds) {
-                liveCatalogChecked = true;
-                const allModules = extractAllFlowModules(parsed.flow);
-                const byModule = new Map<string, string[]>();
+            for (const m of allModules) {
+                const existing = byModule.get(m.module);
+                if (existing) existing.push(m.path);
+                else byModule.set(m.module, [m.path]);
+            }
 
-                for (const m of allModules) {
-                    const existing = byModule.get(m.module);
-                    if (existing) existing.push(m.path);
-                    else byModule.set(m.module, [m.path]);
-                }
+            // Try live catalog first (usually unavailable)
+            if (hasValidApiKey()) {
+                const apiKey = process.env['MAKE_API_KEY']!;
+                const baseUrl = getMakeBaseUrl();
+                const liveIds = await fetchLiveModuleIds(baseUrl, apiKey);
 
-                for (const [moduleId, paths] of byModule.entries()) {
-                    if (liveIds.has(moduleId)) continue;
-                    const suggestion = resolveClosestLiveModule(moduleId, liveIds) || undefined;
-                    const issue: { module: string; suggestion?: string; paths: string[] } = {
-                        module: moduleId,
-                        paths,
-                    };
-                    if (suggestion) {
-                        issue.suggestion = suggestion;
+                if (liveIds) {
+                    liveCatalogChecked = true;
+                    for (const [moduleId, paths] of byModule.entries()) {
+                        if (liveIds.has(moduleId)) continue;
+                        const suggestion = resolveClosestLiveModule(moduleId, liveIds) || undefined;
+                        const issue: { module: string; suggestion?: string; paths: string[] } = {
+                            module: moduleId,
+                            paths,
+                        };
+                        if (suggestion) issue.suggestion = suggestion;
+                        compatibilityIssues.push(issue);
+                        if (suggestion) {
+                            errors.push(`Module "${moduleId}" is not available in this Make account/region. Suggested replacement: "${suggestion}".`);
+                        } else {
+                            errors.push(`Module "${moduleId}" is not available in this Make account/region.`);
+                        }
                     }
-                    compatibilityIssues.push(issue);
-                    if (suggestion) {
-                        errors.push(`Module "${moduleId}" is not available in this Make account/region. Suggested replacement: "${suggestion}".`);
-                    } else {
-                        errors.push(`Module "${moduleId}" is not available in this Make account/region.`);
+                }
+            }
+
+            // Always check verified registry (works offline)
+            verifiedRegistryChecked = true;
+            for (const [moduleId, paths] of byModule.entries()) {
+                const problemInfo = getProblematicModuleInfo(moduleId);
+                if (problemInfo) {
+                    const existing = compatibilityIssues.find(i => i.module === moduleId);
+                    if (!existing) {
+                        compatibilityIssues.push({
+                            module: moduleId,
+                            suggestion: problemInfo.alternative,
+                            problematic: true,
+                            paths,
+                        });
                     }
                 }
-            } else {
-                warnings.push('Live module compatibility check skipped (Make modules endpoint unavailable).');
             }
         }
 
@@ -742,6 +947,7 @@ server.registerTool('validate_scenario', {
             modulesValidated: validatedModules,
             accountCompatibility: {
                 liveCatalogChecked,
+                verifiedRegistryChecked,
                 incompatibleModules: compatibilityIssues,
             },
             summary: errors.length === 0
@@ -777,6 +983,7 @@ server.registerTool('create_scenario', {
         idempotentHint: false,
     },
 }, async ({ name, blueprint, teamId, folderId }) => {
+    const failedModulesOuter: Array<{ module: string; reason: string; alternative?: string }> = [];
     try {
         const apiKey = process.env['MAKE_API_KEY'];
         if (!apiKey || apiKey === 'your_api_key_here') {
@@ -842,17 +1049,10 @@ server.registerTool('create_scenario', {
         }
 
         // Auto-inject designer metadata on flow modules if missing (recursively).
-        // NOTE: We intentionally do NOT inject "version" — Make.com resolves
-        // the latest installed version when omitted.  Forcing version:1 breaks
-        // modules that have been updated (e.g. HTTP is currently v4).
+        // Inject known-good versions for verified modules, strip for unknown ones.
         const healFlow = (flow: any[]) => {
             for (const mod of flow) {
                 if (!mod || typeof mod !== 'object') continue;
-                // Always strip module versions coming from imported/generated blueprints.
-                // A pinned version often causes IM007 when the account/region has different module revisions.
-                if (mod.version !== undefined) {
-                    delete mod.version;
-                }
                 if (!mod.metadata) mod.metadata = { designer: { x: 0, y: 0 } };
                 else if (!mod.metadata.designer) mod.metadata.designer = { x: 0, y: 0 };
                 // Recurse into router routes
@@ -876,9 +1076,30 @@ server.registerTool('create_scenario', {
             healFlow(parsed.flow);
         }
 
-        const removedVersionsCount = Array.isArray(parsed.flow) ? stripModuleVersionsInFlow(parsed.flow) : 0;
-        if (removedVersionsCount > 0) {
-            logger.info('create_scenario: stripped module version fields', { removedVersionsCount });
+        // Inject known-good module versions from verified registry.
+        // For verified modules: set the exact working version.
+        // For unknown modules: strip version to let Make resolve.
+        if (Array.isArray(parsed.flow)) {
+            const versionResult = injectVerifiedVersions(parsed.flow);
+            if (versionResult.injected > 0 || versionResult.stripped > 0) {
+                logger.info('create_scenario: adjusted module versions', {
+                    injectedVerifiedVersions: versionResult.injected,
+                    strippedUnknownVersions: versionResult.stripped,
+                });
+            }
+        }
+
+        // Warn about known problematic modules before attempting creation
+        if (Array.isArray(parsed.flow)) {
+            const allModules = extractAllFlowModules(parsed.flow);
+            for (const { module: moduleId, path: modPath } of allModules) {
+                const problemInfo = getProblematicModuleInfo(moduleId);
+                if (problemInfo) {
+                    normalizationWarnings.push(
+                        `Warning: "${moduleId}" at ${modPath} may fail during API deployment. ${problemInfo.reason}`
+                    );
+                }
+            }
         }
 
         // Account-aware module compatibility check and auto-remap
@@ -953,6 +1174,40 @@ server.registerTool('create_scenario', {
                 const missingModule = extractIm007ModuleId(data);
                 const missingVersion = extractIm007Version(data);
 
+                // Strategy 1: If IM007 for a module we have a verified version for, inject it
+                if (status === 400 && data?.code === 'IM007' && missingModule && attempt < maxAttempts && Array.isArray(parsed.flow)) {
+                    const verifiedVersion = VERIFIED_MODULE_VERSIONS[missingModule];
+                    const verifiedKey = `${missingModule}@verified`;
+                    if (verifiedVersion !== undefined && !triedVersionFallbacks.has(verifiedKey)) {
+                        const updated = setModuleVersionInFlow(parsed.flow, missingModule, verifiedVersion);
+                        if (updated > 0) {
+                            triedVersionFallbacks.add(verifiedKey);
+                            logger.warn('create_scenario: retrying IM007 with verified module version', {
+                                module: missingModule,
+                                verifiedVersion,
+                                updatedModules: updated,
+                                attempt,
+                            });
+                            continue;
+                        }
+                    }
+                }
+
+                // Strategy 2: If IM007 for a known problematic module, stop retrying for this module
+                if (status === 400 && data?.code === 'IM007' && missingModule) {
+                    const problemInfo = getProblematicModuleInfo(missingModule);
+                    if (problemInfo) {
+                        failedModulesOuter.push({
+                            module: missingModule,
+                            reason: problemInfo.reason,
+                            alternative: problemInfo.alternative,
+                        });
+                        // Don't retry — this module won't work via API
+                        throw error;
+                    }
+                }
+
+                // Strategy 3: Try module ID remap from live catalog
                 if (status === 400 && missingModule && liveIds && attempt < maxAttempts) {
                     const replacement = resolveClosestLiveModule(missingModule, liveIds);
                     if (replacement && replacement !== missingModule && Array.isArray(parsed.flow)) {
@@ -964,6 +1219,7 @@ server.registerTool('create_scenario', {
                     }
                 }
 
+                // Strategy 4: Version decrement fallback
                 if (status === 400 && data?.code === 'IM007' && missingModule && missingVersion && missingVersion > 1 && attempt < maxAttempts && Array.isArray(parsed.flow)) {
                     const fallbackVersion = missingVersion - 1;
                     const fallbackKey = `${missingModule}@${fallbackVersion}`;
@@ -983,8 +1239,8 @@ server.registerTool('create_scenario', {
                     }
                 }
 
+                // Strategy 5: Strip all versions as last resort
                 if (status === 400 && attempt < maxAttempts && Array.isArray(parsed.flow) && !strippedVersionsForRetry) {
-                    const data = error.response?.data;
                     const code = data?.code;
                     if (code === 'IM007') {
                         const stripped = stripModuleVersionsInFlow(parsed.flow);
@@ -1011,7 +1267,18 @@ server.registerTool('create_scenario', {
         const postWarnings: string[] = [];
         postWarnings.push(...normalizationWarnings);
         if (createdScenario?.isinvalid === true) {
-            postWarnings.push('Scenario was created but marked invalid by Make. Check modules/connections in Make UI.');
+            const invalidMessage = {
+                success: false,
+                scenario: response.data,
+                remappedModules,
+                warnings: [
+                    ...postWarnings,
+                    'Scenario was created but marked invalid by Make. This usually means one or more modules are unavailable in your account/region.',
+                ],
+                message:
+                    'Scenario was created but is invalid in Make UI. Run check_account_compatibility and replace unsupported modules before retrying.',
+            };
+            return fail(JSON.stringify(invalidMessage, null, 2));
         }
 
         return ok({
@@ -1036,11 +1303,33 @@ server.registerTool('create_scenario', {
         }
         if (status === 400 && data?.code === 'IM007') {
             const detail = data?.detail || data?.message || 'Invalid blueprint';
+            const missingModule = extractIm007ModuleId(data);
+            const problemInfo = missingModule ? getProblematicModuleInfo(missingModule) : null;
+
+            let hint = 'IM007 means a module ID or version is not available for this account/region.';
+            if (problemInfo) {
+                hint = `Module "${missingModule}" is not deployable via the Make API. ${problemInfo.reason}`;
+            } else if (missingModule) {
+                const verifiedVersion = VERIFIED_MODULE_VERSIONS[missingModule];
+                if (verifiedVersion) {
+                    hint = `Module "${missingModule}" should work with version ${verifiedVersion}. This is unexpected — verify MAKE_API_URL matches your Make region.`;
+                } else {
+                    hint = `Module "${missingModule}" is not in the verified registry. It may not be available for API deployment. Consider using http:ActionSendData as a universal alternative.`;
+                }
+            }
+
+            // Include any failed module alternatives collected during retries
+            const failedModuleHints = failedModulesOuter.length > 0
+                ? '\n\nFailed modules:\n' + failedModulesOuter.map((fm: { module: string; reason: string; alternative?: string }) =>
+                    `  - ${fm.module}: ${fm.reason}${fm.alternative ? ` → Use "${fm.alternative}" instead.` : ''}`
+                ).join('\n')
+                : '';
+
             return fail(
-                `Failed to create scenario (HTTP 400): ${JSON.stringify(data, null, 2)}\n` +
-                `Hint: IM007 usually means module ID/version incompatibility for this account/region. ` +
-                `Use check_account_compatibility first and verify MAKE_API_URL matches your Make region (eu1/eu2/us1/us2). ` +
-                `Detail: ${detail}`
+                `Failed to create scenario (IM007): ${detail}\n\n` +
+                `${hint}${failedModuleHints}\n\n` +
+                `Tip: Use check_account_compatibility to verify modules before deploying. ` +
+                `Verify MAKE_API_URL matches your Make region (eu1/eu2/us1/us2).`
             );
         }
         // Include full response data for debugging 400 errors

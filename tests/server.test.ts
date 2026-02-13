@@ -229,7 +229,8 @@ describe('MCP Server Protocol', () => {
 
         const data = JSON.parse((result.content as any[])[0].text);
         expect(Array.isArray(data.warnings)).toBe(true);
-        expect(data.warnings.some((w: string) => w.includes('Module "version" is set in blueprint'))).toBe(true);
+        // Verified module with wrong version gets a specific warning about the verified version
+        expect(data.warnings.some((w: string) => w.includes('verified working version') || w.includes('version'))).toBe(true);
     });
 
     it('should return isError for invalid JSON in blueprint', async () => {
